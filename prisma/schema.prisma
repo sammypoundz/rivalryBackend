@@ -1,0 +1,144 @@
+// Prisma schema for Rivalry — MongoDB
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String   @unique
+  phone     String?  @unique
+  password  String
+  fullName  String
+  avatarUrl String?
+  role      String   @default("user") // user | admin
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  votes      Vote[]
+  supporters Supporter[]
+  bookmarks  Bookmark[]
+  contestants Contestant[]
+}
+
+model Contest {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  tagline     String
+  category    String
+  coverImage  String
+  status      String    @default("upcoming") // upcoming | voting-live | ended
+  startsAt    DateTime?
+  endsAt      DateTime
+  totalVotes  Int       @default(0)
+  rewards     Reward[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contestants Contestant[]
+
+  @@map("contests")
+}
+
+type Reward {
+  position String
+  amount   Int
+  perk     String
+}
+
+model Contestant {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  number       Int      @unique
+  name         String
+  state        String
+  age          Int
+  occupation   String
+  bio          String
+  heroImage    String
+  gallery      String[]
+  votes        Int      @default(0)
+  voteGoal     Int      @default(25000)
+  rank         Int      @default(0)
+  prize         Int      @default(0)
+  likes         Int      @default(0)
+  userId       String?  @db.ObjectId
+  contestId    String   @db.ObjectId
+  votingEndsAt DateTime
+
+  contest    Contest     @relation(fields: [contestId], references: [id])
+  user       User?       @relation(fields: [userId], references: [id])
+  voteList   Vote[]
+  supporters Supporter[]
+  likeList   Like[]
+
+  @@index([contestId])
+  @@map("contestants")
+}
+
+model Like {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  contestantId String   @db.ObjectId
+  // userId when logged in, otherwise the visitor's IP — one like per person
+  voterKey     String
+  createdAt    DateTime @default(now())
+
+  contestant Contestant @relation(fields: [contestantId], references: [id])
+
+  @@unique([contestantId, voterKey])
+  @@index([contestantId])
+  @@map("likes")
+}
+
+model Vote {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  contestantId  String   @db.ObjectId
+  userId        String?  @db.ObjectId
+  supporterName String?
+  amount        Int      @default(1)
+  reference     String?  // payment gateway reference
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+
+  contestant Contestant @relation(fields: [contestantId], references: [id])
+  user       User?      @relation(fields: [userId], references: [id])
+
+  @@index([contestantId])
+  @@index([userId])
+  @@map("votes")
+}
+
+model Supporter {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  contestantId String   @db.ObjectId
+  userId       String?  @db.ObjectId
+  name         String
+  initials     String
+  votes        Int      @default(0)
+  badge        String   @default("Rising") // Diamond | Gold | Silver | Rising
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  contestant Contestant @relation(fields: [contestantId], references: [id])
+  user       User?      @relation(fields: [userId], references: [id])
+
+  @@unique([contestantId, name])
+  @@index([contestantId])
+  @@map("supporters")
+}
+
+model Bookmark {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  ref    String
+  note   String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("bookmarks")
+}
