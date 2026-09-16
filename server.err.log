@@ -11,3 +11,17 @@ ApiError: Authentication required
     at router (C:\Users\gambo\OneDrive\Desktop\rivalry\backend\node_modules\express\lib\router\index.js:47:12) {
   status: 401
 }
+ApiError: Invalid email/phone or password
+    at login (file:///C:/Users/gambo/OneDrive/Desktop/rivalry/backend/src/controllers/auth.controller.js:109:13) {
+  status: 401
+}
+{
+  message: 'Error in loading https://x/y.jpg - ERR_DNS_FAIL 0',
+  name: 'Error',
+  http_code: 400
+}
+{
+  message: 'Error in loading https://x/y.jpg - ERR_DNS_FAIL 0',
+  name: 'Error',
+  http_code: 400
+}

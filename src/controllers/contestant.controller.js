@@ -193,7 +193,13 @@ export async function createContestant(req, res, next) {
         age,
         occupation,
         bio,
-        heroImage: await uploadToCloudinary(heroImage, "hero") || heroImage,
+        // Only upload raw data URLs — when the hero image is already a hosted
+        // URL (e.g. uploaded via /api/uploads/image in the join flow) keep it
+        // as-is. Re-uploading a URL makes Cloudinary try to fetch it and 500s.
+        heroImage:
+          (typeof heroImage === "string" && heroImage.startsWith("data:image/")
+            ? await uploadToCloudinary(heroImage, "hero")
+            : null) || heroImage,
         gallery: gallery || [],
         voteGoal,
         votingEndsAt: new Date(votingEndsAt),

@@ -22,4 +22,29 @@ router.get("/me/contestants", requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/users/me/stats
+ * Aggregate totals across all of the user's contestant entries:
+ * votes received, likes received, photos uploaded and contests joined.
+ */
+router.get("/me/stats", requireAuth, async (req, res, next) => {
+  try {
+    const contestants = await prisma.contestant.findMany({
+      where: { userId: req.user.id },
+      select: { votes: true, likes: true, gallery: true },
+    });
+    res.json({
+      success: true,
+      stats: {
+        contestsJoined: contestants.length,
+        totalVotes: contestants.reduce((sum, c) => sum + (c.votes || 0), 0),
+        totalLikes: contestants.reduce((sum, c) => sum + (c.likes || 0), 0),
+        totalPhotos: contestants.reduce((sum, c) => sum + (c.gallery?.length || 0), 0),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
