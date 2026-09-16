@@ -14,7 +14,7 @@ import { notFound, errorHandler } from "./middleware/error.js";
 
 const app = express();
 
-app.use(cors({ origin: config.clientUrl, credentials: true }));
+app.use(cors({ origin: config.clientUrls, credentials: true }));
 app.use(express.json({ limit: "10mb" }));
 app.use(morgan("dev"));
 

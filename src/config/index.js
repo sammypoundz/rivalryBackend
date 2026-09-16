@@ -15,6 +15,10 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   jwtSecret: process.env.JWT_SECRET || "change-me-in-production",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
+  // Comma-separated list of allowed frontend origins (dev + prod deploy).
+  clientUrls: (process.env.CLIENT_URL || "http://localhost:5173")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   cloudinaryCloud: process.env.CLOUDINARY_CLOUD_NAME || "",
 };
