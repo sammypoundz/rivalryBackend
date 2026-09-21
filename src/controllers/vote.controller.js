@@ -8,6 +8,40 @@ function badgeFor(totalVotes) {
   return "Rising";
 }
 
+// Referral reward: ₦500 unlocks once the referred person's contestant entry
+// has earned at least this many votes.
+const REFERRAL_MIN_VOTES = 5;
+const REFERRAL_REWARD = 500;
+
+/**
+ * Best-effort: when a contestant backed by a referral crosses the minimum
+ * vote count, flip their referrer's invite to "Qualified" (reward unlocked).
+ * Runs after every vote and never fails the vote itself.
+ */
+async function maybeQualifyReferral(contestant) {
+  try {
+    if (!contestant.userId) return;
+    if ((contestant.votes ?? 0) < REFERRAL_MIN_VOTES) return;
+    // Invites are keyed by the REFERRER's id — get it from the referred user
+    const user = await prisma.user.findUnique({
+      where: { id: contestant.userId },
+      select: { referredById: true },
+    });
+    if (!user?.referredById) return;
+    await prisma.referralInvite.updateMany({
+      where: {
+        referrerId: user.referredById,
+        status: "Signed up",
+        // Qualify invites for this contest, or invites with no contest set
+        OR: [{ contestId: contestant.contestId }, { contestId: null }],
+      },
+      data: { status: "Qualified", reward: REFERRAL_REWARD },
+    });
+  } catch {
+    /* referral unlock is best-effort — voting must still succeed */
+  }
+}
+
 /**
  * POST /api/contestants/:id/vote
  * Body: { amount?: number, supporterName?: string }
@@ -88,6 +122,9 @@ export async function vote(req, res, next) {
             });
       }
     }
+
+    // Unlock the referrer's ₦500 once the referred contestant reaches 5 votes
+    await maybeQualifyReferral(contestantUpdated);
 
     res.status(201).json({
       success: true,

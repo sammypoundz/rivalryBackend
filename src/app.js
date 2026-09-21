@@ -33,6 +33,10 @@ app.use("/api/contestants", contestantRouter);
 app.use("/api/users", userRoutes);
 app.use("/api/uploads", uploadRoutes);
 
+// Share-link OG landing pages (crawler-friendly preview + human redirect)
+import { voteOg } from "./controllers/og.controller.js";
+app.get("/api/og/vote/:id", voteOg);
+
 app.use(notFound);
 app.use(errorHandler);
 

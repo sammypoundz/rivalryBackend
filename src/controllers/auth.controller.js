@@ -32,7 +32,7 @@ export function normalizePhone(phone) {
 
 export async function register(req, res, next) {
   try {
-    const { email, phone, password, fullName } = req.body;
+    const { email, phone, password, fullName, referredBy } = req.body;
     if (!password || !fullName)
       throw new ApiError(400, "password and fullName are required");
     if (password.length < 6)
@@ -75,8 +75,35 @@ export async function register(req, res, next) {
         phone: normalizedPhone ?? `${normalizedEmail}@email.rivalry`,
         fullName,
         password: await bcrypt.hash(password, 10),
+        // Link the new account to whoever shared the referral link
+        ...(referredBy && /^[0-9a-fA-F]{24}$/.test(String(referredBy))
+          ? { referredById: String(referredBy) }
+          : {}),
       },
     });
+
+    // If this signup came through a referral link, mark the invite the
+    // referrer sent as "Signed up". The ₦500 reward only becomes Qualified
+    // (redeemable) once the referred person's contestant earns ≥5 votes —
+    // see maybeQualifyReferral in the vote controller.
+    if (referredBy && /^[0-9a-fA-F]{24}$/.test(String(referredBy))) {
+      try {
+        const contacts = [normalizedEmail, normalizedPhone]
+          .filter(Boolean)
+          .map((c) => String(c).toLowerCase());
+        await prisma.referralInvite.updateMany({
+          where: {
+            referrerId: String(referredBy),
+            status: "Invited",
+            contact: { in: contacts },
+          },
+          // Signed up but NOT yet redeemable — unlocks at 5 votes
+          data: { status: "Signed up", reward: 0 },
+        });
+      } catch {
+        /* referral crediting is best-effort — signup still succeeds */
+      }
+    }
     res
       .status(201)
       .json({ success: true, user: publicUser(user), token: signToken(user) });

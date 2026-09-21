@@ -120,6 +120,10 @@ export async function addGalleryImage(req, res, next) {
     if (!contestant) throw new ApiError(404, "Contestant not found");
     if (contestant.userId !== req.user.id) throw new ApiError(403, "Not your contestant");
     if (contestant.gallery.length >= 20) throw new ApiError(400, "Gallery is full (max 20 photos)");
+    // Already in the gallery (or it IS the hero photo) — don't store a duplicate
+    if (contestant.gallery.includes(image) || contestant.heroImage === image) {
+      return res.json({ success: true, gallery: contestant.gallery });
+    }
 
     // Upload to Cloudinary when configured; otherwise store the data URL
     const stored = (await uploadToCloudinary(image, contestant.id)) || image;
@@ -200,7 +204,11 @@ export async function createContestant(req, res, next) {
           (typeof heroImage === "string" && heroImage.startsWith("data:image/")
             ? await uploadToCloudinary(heroImage, "hero")
             : null) || heroImage,
-        gallery: gallery || [],
+        // De-duplicate: no repeated URLs, and the hero/cover image never
+        // appears twice (once as heroImage, again in the gallery)
+        gallery: Array.from(new Set(gallery || [])).filter(
+          (u) => u && u !== heroImage,
+        ),
         voteGoal,
         votingEndsAt: new Date(votingEndsAt),
         // Link the entrant so /users/me/contestants works for self sign-up

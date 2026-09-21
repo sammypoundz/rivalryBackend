@@ -25,6 +25,13 @@ model User {
   supporters Supporter[]
   bookmarks  Bookmark[]
   contestants Contestant[]
+
+  // Referrals: the user who invited this person (via a share link), and the
+  // invites this person has sent out
+  referredById String? @db.ObjectId
+  referredBy   User?   @relation("ReferredBy", fields: [referredById], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  referredUsers User[] @relation("ReferredBy")
+  referralsSent ReferralInvite[] @relation("Referrer")
 }
 
 model Contest {
@@ -141,4 +148,23 @@ model Bookmark {
   user User @relation(fields: [userId], references: [id])
 
   @@map("bookmarks")
+}
+
+/// A contestant invited someone to join a contest. When the invitee registers
+/// through the referrer's share link (register with `referredBy`), the invite
+/// is marked "Signed up" and credited.
+model ReferralInvite {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  referrerId String   @db.ObjectId
+  name       String
+  contact    String
+  status     String   @default("Invited") // Invited | Signed up
+  reward     Int      @default(0)
+  contestId  String?  @db.ObjectId
+  createdAt  DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+
+  @@index([referrerId])
+  @@map("referral_invites")
 }

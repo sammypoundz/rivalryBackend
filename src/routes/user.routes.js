@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { ApiError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -42,6 +43,54 @@ router.get("/me/stats", requireAuth, async (req, res, next) => {
         totalPhotos: contestants.reduce((sum, c) => sum + (c.gallery?.length || 0), 0),
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/users/me/referrals
+ * The logged-in user's referral invites + a running total of referral earnings.
+ */
+router.get("/me/referrals", requireAuth, async (req, res, next) => {
+  try {
+    const invites = await prisma.referralInvite.findMany({
+      where: { referrerId: req.user.id },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({
+      success: true,
+      referrals: invites,
+      earned: invites.reduce((sum, r) => sum + (r.reward || 0), 0),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/users/me/referrals
+ * Body: { name, contact, contestId? }
+ * Records an invite the user sent (shown as "Invited" until they sign up
+ * through the referrer's link).
+ */
+router.post("/me/referrals", requireAuth, async (req, res, next) => {
+  try {
+    const { name, contact, contestId } = req.body;
+    if (!name || !contact)
+      throw new ApiError(400, "name and contact are required");
+
+    const invite = await prisma.referralInvite.create({
+      data: {
+        referrerId: req.user.id,
+        name: String(name).trim(),
+        contact: String(contact).trim(),
+        ...(contestId && /^[0-9a-fA-F]{24}$/.test(String(contestId))
+          ? { contestId: String(contestId) }
+          : {}),
+      },
+    });
+    res.status(201).json({ success: true, referral: invite });
   } catch (err) {
     next(err);
   }
