@@ -34,8 +34,9 @@ app.use("/api/users", userRoutes);
 app.use("/api/uploads", uploadRoutes);
 
 // Share-link OG landing pages (crawler-friendly preview + human redirect)
-import { voteOg } from "./controllers/og.controller.js";
+import { voteOg, voteOgImage } from "./controllers/og.controller.js";
 app.get("/api/og/vote/:id", voteOg);
+app.get("/api/og/vote/:id/image", voteOgImage);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -7,11 +7,13 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "prisma:generate": "prisma generate",
+    "postinstall": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
     "seed": "node src/seed.js"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.9",
     "@prisma/client": "^6.2.1",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.11.0",

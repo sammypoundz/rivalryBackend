@@ -1,4 +1,4 @@
-import { prisma } from "../config/prisma.js";
+﻿import { prisma } from "../config/prisma.js";
 
 const escape = (s = "") =>
   String(s)
@@ -15,12 +15,24 @@ const APP_URL = (process.env.CLIENT_URL || "http://localhost:5173")
 /** Formats a number as ₦ with thousands separators (e.g. 50000 → ₦50,000). */
 const naira = (n) => `₦${Number(n || 0).toLocaleString("en-NG")}`;
 
+/** Fetches the contestant's hero photo as a Buffer (null on any failure). */
+async function fetchPhoto(url) {
+  if (!url || !/^https?:\/\//.test(url)) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > 0 ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * GET /api/og/vote/:id
  * Share-link landing page for a contestant's voting profile.
- * - Social crawlers (WhatsApp, X, Facebook, Telegram...) get rich OG meta tags
- *   and a fully-designed 1200x630 preview card (photo, contest name, vote goal,
- *   "VOTE FOR ME" CTA).
+ * - Social crawlers get rich OG meta tags; og:image points at the rendered
+ *   PNG card (/image) so WhatsApp/X/Facebook show the designed preview.
  * - Real visitors are redirected straight into the app at #/vote/:id.
  */
 export async function voteOg(req, res) {
@@ -41,116 +53,14 @@ export async function voteOg(req, res) {
   const goal = contestant.voteGoal || 25000;
   const votes = contestant.votes || 0;
   const remaining = Math.max(0, goal - votes);
-  const photo = contestant.heroImage || "";
-  const progress = Math.min(100, Math.round((votes / Math.max(1, goal)) * 100));
 
-  // ---------- Crawler check ----------
-  const ua = req.headers["user-agent"] || "";
-  const isCrawler =
-    /bot|crawl|spider|slurp|facebookexternalhit|facebot|embed|whatsapp|telegrambot|twitterbot|discordbot|linkedinbot|snapchat|preview/i.test(
-      ua,
-    );
+  // The rendered card PNG - absolute URL using this request's host
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const ogImage = `${proto}://${host}/api/og/vote/${id}/image`;
 
-  // ---------- Shared design tokens (matches the app: black + gold) ----------
-  const CSS = `
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Poppins',system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#fff;
-      width:1200px;height:630px;overflow:hidden}
-    .card{position:relative;width:1200px;height:630px;
-      background:radial-gradient(900px 500px at 85% -10%,rgba(212,175,55,.28),transparent 60%),
-                 radial-gradient(700px 450px at -5% 110%,rgba(212,175,55,.18),transparent 55%),
-                 linear-gradient(145deg,#101010,#0a0a0a 55%,#151005);
-      display:flex;align-items:center;padding:0 72px;overflow:hidden}
-    .card::before{content:'';position:absolute;inset:14px;border:1px solid rgba(212,175,55,.25);
-      border-radius:28px;pointer-events:none}
-    .glow{position:absolute;width:520px;height:520px;border-radius:50%;
-      background:radial-gradient(circle,rgba(212,175,55,.16),transparent 70%);
-      right:60px;top:-90px;pointer-events:none}
-    .photo-wrap{position:relative;width:400px;height:400px;flex-shrink:0;margin-right:70px}
-    .photo-ring{position:absolute;inset:-12px;border-radius:50%;
-      background:conic-gradient(from 140deg,#f0d67c,#9a7b1e,#d4af37,#f0d67c);
-      box-shadow:0 24px 70px rgba(212,175,55,.35)}
-    .photo-ring::after{content:'';position:absolute;inset:9px;border-radius:50%;background:#0a0a0a}
-    .photo{position:absolute;inset:0;border-radius:50%;object-fit:cover;
-      border:4px solid #0a0a0a;z-index:2}
-    .badge{position:absolute;z-index:3;bottom:6px;left:50%;transform:translateX(-50%);
-      background:linear-gradient(135deg,#f0d67c,#d4af37);color:#1a1405;font-weight:800;
-      font-size:20px;letter-spacing:2px;padding:10px 26px;border-radius:999px;
-      box-shadow:0 10px 30px rgba(212,175,55,.45);white-space:nowrap}
-    .content{position:relative;z-index:2;display:flex;flex-direction:column;flex:1;min-width:0}
-    .brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
-    .brand-mark{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
-      background:linear-gradient(135deg,#f0d67c,#9a7b1e);color:#1a1405;font-weight:800;font-size:20px}
-    .brand-name{font-size:17px;font-weight:600;letter-spacing:5px;color:#d4af37;text-transform:uppercase}
-    .contest{font-size:20px;font-weight:500;color:#9a9a9a;letter-spacing:1px;margin-bottom:10px}
-    .contest strong{color:#f0d67c;font-weight:700}
-    .name{font-size:62px;font-weight:800;line-height:1.05;letter-spacing:-1px;margin-bottom:14px;
-      background:linear-gradient(120deg,#fff 30%,#f0d67c);-webkit-background-clip:text;
-      -webkit-text-fill-color:transparent;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .wants{display:flex;align-items:center;gap:14px;margin-bottom:30px}
-    .wants-icon{width:44px;height:44px;border-radius:50%;flex-shrink:0;
-      background:rgba(212,175,55,.15);border:1px solid rgba(212,175,55,.4);
-      display:flex;align-items:center;justify-content:center;color:#d4af37;font-size:20px;font-weight:800}
-    .wants-text{font-size:24px;color:#bdbdbd;line-height:1.3}
-    .wants-text b{color:#fff;font-size:30px}
-    .bar{width:100%;max-width:480px;height:10px;border-radius:999px;background:rgba(255,255,255,.08);
-      overflow:hidden;margin-bottom:30px}
-    .bar-fill{height:100%;border-radius:999px;
-      background:linear-gradient(90deg,#9a7b1e,#d4af37 60%,#f0d67c);
-      box-shadow:0 0 14px rgba(212,175,55,.6)}
-    .cta-row{display:flex;align-items:center;gap:26px}
-    .cta{display:inline-flex;align-items:center;gap:14px;background:linear-gradient(135deg,#f0d67c,#d4af37 55%,#9a7b1e);
-      color:#1a1405;font-size:27px;font-weight:800;letter-spacing:2.5px;padding:22px 46px;border-radius:999px;
-      box-shadow:0 16px 44px rgba(212,175,55,.42);white-space:nowrap}
-    .cta .arrow{font-size:24px;font-weight:800}
-    .cta-sub{font-size:17px;color:#8d8d8d;letter-spacing:.4px}
-    .footer{position:absolute;left:72px;right:72px;bottom:34px;display:flex;
-      justify-content:space-between;align-items:center;font-size:14px;color:#6f6f6f;
-      letter-spacing:1.5px;text-transform:uppercase}
-    .dot{color:#d4af37}
-  `;
-
-  // ---------- The designed OG card (seen by crawlers and previews) ----------
-  const CARD_HTML = `<!doctype html>
-<html><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>${CSS}</style></head>
-<body>
-  <div class="card">
-    <div class="glow"></div>
-    <div class="photo-wrap">
-      <div class="photo-ring"></div>
-      ${photo ? `<img class="photo" src="${escape(photo)}" alt="${escape(name)}">` : ""}
-      <div class="badge">CONTESTANT</div>
-    </div>
-    <div class="content">
-      <div class="brand">
-        <div class="brand-mark">R</div>
-        <div class="brand-name">Rivalry</div>
-      </div>
-      <div class="contest">Contest &mdash; <strong>${escape(contestTitle)}</strong></div>
-      <div class="name">${escape(name)}</div>
-      <div class="wants">
-        <div class="wants-icon">&#127942;</div>
-        <div class="wants-text">Wants to win <b>${naira(contestant.prize || goal)}</b> grand prize<br>
-          ${remaining > 0 ? `${naira(remaining)} votes to go &middot; ${progress}% there` : "Goal reached!"}</div>
-      </div>
-      <div class="bar"><div class="bar-fill" style="width:${progress}%"></div></div>
-      <div class="cta-row">
-        <div class="cta">VOTE FOR ME <span class="arrow">&rarr;</span></div>
-        <div class="cta-sub">${votes.toLocaleString("en-NG")} votes so far</div>
-      </div>
-    </div>
-    <div class="footer">
-      <span>rivalry <span class="dot">&bull;</span> every vote counts</span>
-      <span>voting is live now</span>
-    </div>
-  </div>
-</body></html>`;
-
-  // ---------- OG meta page (crawlers read this; humans get redirected) ----------
-  const ogTitle = `Vote ${name} — ${contestTitle} on Rivalry 🏆`;
-  const ogDesc = `${name} needs ${remaining.toLocaleString("en-NG")} more votes to win ${contestTitle}. Tap to vote for me — it takes 10 seconds!`;
+  const ogTitle = `Vote ${name} - ${contestTitle} on Rivalry`;
+  const ogDesc = `${name} needs ${remaining.toLocaleString("en-NG")} more votes to win ${contestTitle}. Tap to vote for me - it takes 10 seconds!`;
 
   const META_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
@@ -159,22 +69,296 @@ export async function voteOg(req, res) {
 <meta property="og:description" content="${escape(ogDesc)}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escape(deepLink)}">
-<meta property="og:image" content="${escape(photo)}">
+<meta property="og:image" content="${escape(ogImage)}">
 <meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
 <meta property="og:site_name" content="Rivalry">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${escape(ogTitle)}">
 <meta name="twitter:description" content="${escape(ogDesc)}">
-<meta name="twitter:image" content="${escape(photo)}">
+<meta name="twitter:image" content="${escape(ogImage)}">
 <meta http-equiv="refresh" content="0;url=${escape(deepLink)}">
 <script>setTimeout(function(){window.location.replace(${JSON.stringify(deepLink)})},50);</script>
 </head>
-<body>${CARD_HTML}</body></html>`;
+<body></body></html>`;
 
   res.set("Cache-Control", "public, max-age=300");
-  if (isCrawler) {
-    return res.status(200).type("html").send(CARD_HTML);
-  }
   return res.status(200).type("html").send(META_HTML);
+}
+
+/**
+ * GET /api/og/vote/:id/image
+ * Renders the designed OG card as a real 1200x630 PNG image — this is what
+ * WhatsApp/X/Facebook actually display (they don't render HTML).
+ */
+export async function voteOgImage(req, res) {
+  const { id } = req.params;
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) {
+    return res.status(404).send("Not found");
+  }
+
+  const contestant = await prisma.contestant.findUnique({
+    where: { id },
+    include: { contest: true },
+  });
+  if (!contestant) return res.status(404).send("Not found");
+
+  const name = contestant.name || "Contestant";
+  const contestTitle = contestant.contest?.title || "Rivalry Contest";
+  const goal = contestant.voteGoal || 25000;
+  const votes = contestant.votes || 0;
+  const remaining = Math.max(0, goal - votes);
+  const progress = Math.min(100, (votes / Math.max(1, goal)) * 100);
+
+  // Poppins font (falls back to the default if the fetch fails)
+  try {
+    const fontRes = await fetch(
+      "https://fonts.gstatic.com/s/poppins/v21/pxiEyp8kv8JHgFVrJJfecg.woff2",
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (fontRes.ok) {
+      const { GlobalFonts } = await import("@napi-rs/canvas");
+      GlobalFonts.register(
+        new Uint8Array(await fontRes.arrayBuffer()),
+        "Poppins",
+      );
+    }
+  } catch {
+    /* fall back to default font */
+  }
+
+  const { createCanvas, Image } = await import("@napi-rs/canvas");
+  const canvas = createCanvas(1200, 630);
+  const ctx = canvas.getContext("2d");
+
+  // ----- Background: layered gold-on-black like the app -----
+  const bg = ctx.createLinearGradient(0, 0, 1200, 630);
+  bg.addColorStop(0, "#101010");
+  bg.addColorStop(0.55, "#0a0a0a");
+  bg.addColorStop(1, "#151005");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // Top-right gold glow
+  const glow = ctx.createRadialGradient(1000, -50, 50, 1000, -50, 500);
+  glow.addColorStop(0, "rgba(212,175,55,0.30)");
+  glow.addColorStop(1, "rgba(212,175,55,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // Bottom-left gold glow
+  const glow2 = ctx.createRadialGradient(0, 680, 30, 0, 680, 450);
+  glow2.addColorStop(0, "rgba(212,175,55,0.18)");
+  glow2.addColorStop(1, "rgba(212,175,55,0)");
+  ctx.fillStyle = glow2;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // Inner gold border
+  ctx.strokeStyle = "rgba(212,175,55,0.30)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(14, 14, 1172, 602, 26);
+  ctx.stroke();
+
+  ctx.textBaseline = "alphabetic";
+
+  // ----- Brand row -----
+  const brandGrad = ctx.createLinearGradient(72, 40, 114, 82);
+  brandGrad.addColorStop(0, "#f0d67c");
+  brandGrad.addColorStop(1, "#9a7b1e");
+  ctx.fillStyle = brandGrad;
+  ctx.beginPath();
+  ctx.roundRect(72, 40, 42, 42, 12);
+  ctx.fill();
+  ctx.fillStyle = "#1a1405";
+  ctx.font = "800 24px Poppins, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("R", 93, 72);
+
+  ctx.fillStyle = "#d4af37";
+  ctx.font = "600 18px Poppins, sans-serif";
+  ctx.textAlign = "left";
+  ctx.letterSpacing = "6px";
+  ctx.fillText("RIVALRY", 130, 70);
+  ctx.letterSpacing = "0px";
+
+  // ----- Contest name -----
+  ctx.fillStyle = "#9a9a9a";
+  ctx.font = "500 21px Poppins, sans-serif";
+  ctx.fillText("Contest — ", 72, 130);
+  const contestX = 72 + ctx.measureText("Contest — ").width;
+  ctx.fillStyle = "#f0d67c";
+  ctx.font = "700 21px Poppins, sans-serif";
+  let contestTitleShown = contestTitle;
+  while (
+    ctx.measureText(contestTitleShown).width > 420 &&
+    contestTitleShown.length > 4
+  ) {
+    contestTitleShown = contestTitleShown.slice(0, -2);
+  }
+  if (contestTitleShown !== contestTitle) contestTitleShown += "…";
+  ctx.fillText(contestTitleShown, contestX, 130);
+
+  // ----- Contestant name (big, white→gold gradient) -----
+  const nameGrad = ctx.createLinearGradient(72, 150, 700, 230);
+  nameGrad.addColorStop(0, "#ffffff");
+  nameGrad.addColorStop(1, "#f0d67c");
+  ctx.fillStyle = nameGrad;
+  ctx.font = "800 58px Poppins, sans-serif";
+  let nameShown = name;
+  while (ctx.measureText(nameShown).width > 560 && nameShown.length > 4) {
+    nameShown = nameShown.slice(0, -2);
+  }
+  if (nameShown !== name) nameShown += "…";
+  ctx.fillText(nameShown, 72, 212);
+
+  // ----- "Wants to win" line -----
+  ctx.fillStyle = "#bdbdbd";
+  ctx.font = "400 22px Poppins, sans-serif";
+  ctx.fillText("Wants to win", 72, 268);
+  const prize = contestant.prize || goal;
+  const winX = 72 + ctx.measureText("Wants to win ").width;
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 26px Poppins, sans-serif";
+  ctx.fillText(`${naira(prize)} grand prize`, winX, 268);
+
+  // ----- Progress bar -----
+  const barY = 300;
+  const barW = 460;
+  ctx.fillStyle = "rgba(255,255,255,0.09)";
+  ctx.beginPath();
+  ctx.roundRect(72, barY, barW, 10, 5);
+  ctx.fill();
+  if (progress > 0) {
+    const barGrad = ctx.createLinearGradient(72, 0, 72 + barW, 0);
+    barGrad.addColorStop(0, "#9a7b1e");
+    barGrad.addColorStop(0.6, "#d4af37");
+    barGrad.addColorStop(1, "#f0d67c");
+    ctx.fillStyle = barGrad;
+    ctx.beginPath();
+    ctx.roundRect(72, barY, Math.max(10, barW * (progress / 100)), 10, 5);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#8d8d8d";
+  ctx.font = "400 17px Poppins, sans-serif";
+  ctx.fillText(
+    remaining > 0
+      ? `${naira(remaining)} votes to go  ·  ${Math.round(progress)}% there`
+      : "Goal reached! 🎉",
+    72,
+    342,
+  );
+
+  // ----- CTA pill -----
+  const ctaY = 380;
+  const ctaGrad = ctx.createLinearGradient(72, ctaY, 460, ctaY + 62);
+  ctaGrad.addColorStop(0, "#f0d67c");
+  ctaGrad.addColorStop(0.55, "#d4af37");
+  ctaGrad.addColorStop(1, "#9a7b1e");
+  ctx.fillStyle = ctaGrad;
+  ctx.beginPath();
+  ctx.roundRect(72, ctaY, 388, 62, 31);
+  ctx.fill();
+  ctx.fillStyle = "#1a1405";
+  ctx.font = "800 25px Poppins, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("VOTE FOR ME →", 266, ctaY + 42);
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#8d8d8d";
+  ctx.font = "400 17px Poppins, sans-serif";
+  ctx.fillText(`${votes.toLocaleString("en-NG")} votes so far`, 72, ctaY + 100);
+
+  // ----- Footer -----
+  ctx.fillStyle = "#6f6f6f";
+  ctx.font = "400 14px Poppins, sans-serif";
+  ctx.fillText("RIVALRY · EVERY VOTE COUNTS", 72, 596);
+  ctx.textAlign = "right";
+  ctx.fillText("VOTING IS LIVE NOW", 1128, 596);
+  ctx.textAlign = "left";
+
+  // ----- Circular photo with gold ring (right side) -----
+  const cx = 890;
+  const cy = 300;
+  const r = 175;
+  const ring = (() => {
+    if (typeof ctx.createConicGradient === "function") {
+      const g = ctx.createConicGradient(2.4, cx, cy);
+      g.addColorStop(0, "#f0d67c");
+      g.addColorStop(0.35, "#9a7b1e");
+      g.addColorStop(0.7, "#d4af37");
+      g.addColorStop(1, "#f0d67c");
+      return g;
+    }
+    const g = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+    g.addColorStop(0, "#f0d67c");
+    g.addColorStop(1, "#9a7b1e");
+    return g;
+  })();
+
+  // Glow behind the ring
+  const ringGlow = ctx.createRadialGradient(cx, cy, r, cx, cy, r + 70);
+  ringGlow.addColorStop(0, "rgba(212,175,55,0.35)");
+  ringGlow.addColorStop(1, "rgba(212,175,55,0)");
+  ctx.fillStyle = ringGlow;
+  ctx.fillRect(cx - r - 80, cy - r - 80, (r + 80) * 2, (r + 80) * 2);
+
+  ctx.fillStyle = ring;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#0a0a0a";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Clip and draw the hero photo in a circle (cover-fit)
+  const photoBuf = await fetchPhoto(contestant.heroImage);
+  let photoDrawn = false;
+  if (photoBuf) {
+    try {
+      const img = new Image();
+      img.src = photoBuf;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.clip();
+      const scale = Math.max((r * 2) / img.width, (r * 2) / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+      ctx.restore();
+      photoDrawn = true;
+    } catch {
+      /* draw placeholder below */
+    }
+  }
+  if (!photoDrawn) {
+    // Placeholder: gold initial on dark circle
+    ctx.fillStyle = "#161616";
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "800 120px Poppins, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(name[0]?.toUpperCase() || "R", cx, cy + 42);
+    ctx.textAlign = "left";
+  }
+
+  // "CONTESTANT" pill badge under the photo
+  ctx.fillStyle = "#d4af37";
+  ctx.beginPath();
+  ctx.roundRect(cx - 96, cy + r - 14, 192, 40, 20);
+  ctx.fill();
+  ctx.fillStyle = "#1a1405";
+  ctx.font = "800 16px Poppins, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("CONTESTANT", cx, cy + r + 12);
+  ctx.textAlign = "left";
+
+  const png = canvas.toBuffer("image/png");
+  res.set("Content-Type", "image/png");
+  res.set("Cache-Control", "public, max-age=300");
+  res.status(200).send(png);
 }
