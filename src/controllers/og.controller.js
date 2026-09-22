@@ -152,10 +152,14 @@ export async function voteOg(req, res) {
   const votes = contestant.votes || 0;
   const remaining = Math.max(0, goal - votes);
 
-  // The rendered card PNG - absolute URL using this request's host
+  // The rendered card PNG - absolute URL using this request's host AND the
+  // same path prefix the crawler used, so the link works both when hit
+  // directly on the backend (/api/og/...) and through the frontend proxy
+  // (/og/...) without extra Vercel rewrites for the image route.
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const ogImage = `${proto}://${host}/api/og/vote/${id}/image`;
+  const basePath = req.path.replace(/\/image$/, ""); // e.g. /og/vote/:id or /api/og/vote/:id
+  const ogImage = `${proto}://${host}${basePath}/image`;
 
   const ogTitle = `Vote ${name} - ${contestTitle} on Rivalry`;
   const ogDesc = `${name} needs ${remaining.toLocaleString("en-NG")} more votes to win ${contestTitle}. Tap to vote for me - it takes 10 seconds!`;
