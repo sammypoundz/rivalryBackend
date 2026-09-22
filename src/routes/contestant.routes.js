@@ -16,6 +16,9 @@ const single = Router();
 
 single.get("/:id", contestant.getContestant);
 single.post("/:id/like", optionalAuth, contestant.toggleLike);
+single.post("/:id/gallery/like", optionalAuth, contestant.likeImage);
+single.post("/:id/hero/like", optionalAuth, contestant.likeImage);
+single.post("/:id/gallery/likes", optionalAuth, contestant.imageLikesForViewer);
 single.post("/:id/gallery", requireAuth, contestant.addGalleryImage);
 single.delete("/:id/gallery", requireAuth, contestant.removeGalleryImage);
 single.put("/:id", requireAuth, requireAdmin, contestant.updateContestant);

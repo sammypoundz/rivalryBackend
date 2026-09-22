@@ -83,6 +83,7 @@ model Contestant {
   voteList   Vote[]
   supporters Supporter[]
   likeList   Like[]
+  imageLikes ImageLike[] @relation("imageLikes")
 
   @@index([contestId])
   @@map("contestants")
@@ -100,6 +101,24 @@ model Like {
   @@unique([contestantId, voterKey])
   @@index([contestantId])
   @@map("likes")
+}
+
+/// A like on ONE gallery photo (or the hero image) of a contestant.
+/// One per person per image — likerKey is the userId when logged in,
+/// otherwise a stable device fingerprint sent by the client.
+/// Toggling again unlikes.
+model ImageLike {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  contestantId String   @db.ObjectId
+  image        String   // the image URL stored on the contestant
+  likerKey     String
+  createdAt    DateTime @default(now())
+
+  contestant Contestant @relation("imageLikes", fields: [contestantId], references: [id])
+
+  @@unique([contestantId, image, likerKey])
+  @@index([contestantId])
+  @@map("image_likes")
 }
 
 model Vote {

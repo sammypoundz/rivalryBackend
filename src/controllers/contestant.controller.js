@@ -51,7 +51,12 @@ export async function getContestant(req, res, next) {
       include: { contest: true, supporters: { orderBy: { votes: "desc" }, take: 10 } },
     });
     if (!contestant) throw new ApiError(404, "Contestant not found");
-    const voterKey = req.userId || `ip:${req.ip}`;
+    // "Liked by me" must match how the like was stored: userId when logged
+    // in, device fingerprint for guests (falls back to IP).
+    const fingerprint =
+      req.body?.deviceId || req.headers["x-device-id"] || "";
+    const voterKey =
+      req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
     const likedByMe = await prisma.like.findUnique({
       where: { contestantId_voterKey: { contestantId: contestant.id, voterKey } },
     });
@@ -71,7 +76,12 @@ export async function toggleLike(req, res, next) {
     if (!/^[0-9a-fA-F]{24}$/.test(contestantId)) {
       throw new ApiError(404, "Contestant not found");
     }
-    const voterKey = req.userId || `ip:${req.ip}`;
+    // Logged-in users key by userId; guests by device fingerprint (header),
+    // falling back to IP when no fingerprint was sent.
+    const fingerprint =
+      req.body?.deviceId || req.headers["x-device-id"] || "";
+    const voterKey =
+      req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
 
     const existing = await prisma.like.findUnique({
       where: { contestantId_voterKey: { contestantId, voterKey } },
@@ -95,6 +105,125 @@ export async function toggleLike(req, res, next) {
     });
     liked = true;
     res.json({ success: true, liked, likes: updated.likes });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/contestants/:id/gallery/like
+ * POST /api/contestants/:id/hero/like
+ * Toggle a like on ONE image of a contestant. Works for guests via a device
+ * fingerprint (body/headers x-device-id) or IP fallback. Tapping again
+ * unlikes. Per-image likes accumulate onto the contestant's total `likes`.
+ */
+export async function likeImage(req, res, next) {
+  try {
+    const contestantId = req.params.id;
+    if (!/^[0-9a-fA-F]{24}$/.test(contestantId)) {
+      throw new ApiError(404, "Contestant not found");
+    }
+    const { image } = req.body;
+    if (!image || typeof image !== "string") {
+      throw new ApiError(400, "image is required");
+    }
+
+    const contestant = await prisma.contestant.findUnique({
+      where: { id: contestantId },
+      select: { heroImage: true, gallery: true },
+    });
+    if (!contestant) throw new ApiError(404, "Contestant not found");
+    // Only likes on images that actually belong to this contestant count.
+    if (image !== contestant.heroImage && !contestant.gallery.includes(image)) {
+      throw new ApiError(400, "Image does not belong to this contestant");
+    }
+
+    const fingerprint =
+      req.body?.deviceId || req.headers["x-device-id"] || "";
+    const likerKey =
+      req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
+
+    // Toggle: like if not liked, unlike if already liked.
+    const existing = await prisma.imageLike.findUnique({
+      where: {
+        contestantId_image_likerKey: { contestantId, image, likerKey },
+      },
+    });
+    let liked;
+    if (existing) {
+      await prisma.imageLike.delete({ where: { id: existing.id } });
+      liked = false;
+    } else {
+      await prisma.imageLike.create({ data: { contestantId, image, likerKey } });
+      liked = true;
+    }
+
+    // Count distinct likers for this image.
+    const imageLikes = await prisma.imageLike.count({
+      where: { contestantId, image },
+    });
+
+    // Recompute the contestant's total likes: profile likes + all image likes.
+    const profileLikes = await prisma.like.count({ where: { contestantId } });
+    const allImageLikes = await prisma.imageLike.count({ where: { contestantId } });
+    await prisma.contestant.update({
+      where: { id: contestantId },
+      data: { likes: profileLikes + allImageLikes },
+    });
+
+    res.json({
+      success: true,
+      liked,
+      imageLikes,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/contestants/:id/gallery/likes
+ * Bulk-lookup: which images (hero + gallery) has THIS viewer already liked,
+ * and how many likes each has. Body: { images: string[] }.
+ */
+export async function imageLikesForViewer(req, res, next) {
+  try {
+    const contestantId = req.params.id;
+    if (!/^[0-9a-fA-F]{24}$/.test(contestantId)) {
+      throw new ApiError(404, "Contestant not found");
+    }
+    const images = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u) => typeof u === "string")
+      : [];
+    if (images.length === 0) {
+      return res.json({ success: true, likedImages: [], counts: {} });
+    }
+
+    const fingerprint =
+      req.body?.deviceId || req.headers["x-device-id"] || "";
+    const likerKey =
+      req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
+
+    const [mine, counts] = await Promise.all([
+      prisma.imageLike.findMany({
+        where: { contestantId, image: { in: images }, likerKey },
+        select: { image: true },
+      }),
+      prisma.imageLike.groupBy({
+        by: ["image"],
+        where: { contestantId, image: { in: images } },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const countMap = {};
+    for (const row of counts) countMap[row.image] = row._count._all;
+
+    res.json({
+      success: true,
+      likedImages: mine.map((m) => m.image),
+      counts: countMap,
+    });
   } catch (err) {
     next(err);
   }
@@ -204,10 +333,12 @@ export async function createContestant(req, res, next) {
           (typeof heroImage === "string" && heroImage.startsWith("data:image/")
             ? await uploadToCloudinary(heroImage, "hero")
             : null) || heroImage,
-        // De-duplicate: no repeated URLs, and the hero/cover image never
-        // appears twice (once as heroImage, again in the gallery)
-        gallery: Array.from(new Set(gallery || [])).filter(
-          (u) => u && u !== heroImage,
+        // The contestant's own photo belongs in the gallery too — seed the
+        // gallery with the hero image (plus any extra uploads), de-duplicated.
+        // The public profile filters the hero out of the gallery view so it
+        // never renders twice, but MySpace lets the owner manage it.
+        gallery: Array.from(new Set([heroImage, ...(gallery || [])])).filter(
+          (u) => u,
         ),
         voteGoal,
         votingEndsAt: new Date(votingEndsAt),
