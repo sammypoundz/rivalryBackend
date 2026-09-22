@@ -14,18 +14,116 @@ const APP_URL = (process.env.CLIENT_URL || "http://localhost:5173")
 
 /** Formats a number as ₦ with thousands separators (e.g. 50000 → ₦50,000). */
 const naira = (n) => `₦${Number(n || 0).toLocaleString("en-NG")}`;
+/** Font stack for money strings — Noto Sans carries the ₦ glyph, Poppins does not. */
+const nairaFont = (weight, px) => `${weight} ${px}px "Noto Sans", Poppins, sans-serif`;
+/** Characters that only exist in the Noto Sans symbol subset (not Poppins). */
+const SYMBOL_RE = /[₦]/;
 
-/** Fetches the contestant's hero photo as a Buffer (null on any failure). */
+/**
+ * Draws a string that mixes Poppins-only and Noto-only characters by splitting
+ * it into runs per font. @napi-rs/canvas doesn't fall back per glyph — it uses
+ * the first family for the whole string and draws .notdef boxes for anything
+ * it lacks — so ₦/→ must be drawn in their own fillText calls.
+ */
+function fillMixedText(ctx, text, x, y, poppinsFont, symbolFont) {
+  if (!SYMBOL_RE.test(text)) {
+    ctx.font = poppinsFont;
+    ctx.fillText(text, x, y);
+    return;
+  }
+  // Split into runs: symbol chars → Noto, everything else → Poppins
+  const runs = [];
+  let cur = "", curSym = null;
+  for (const ch of text) {
+    const isSym = SYMBOL_RE.test(ch);
+    if (isSym !== curSym && cur) {
+      runs.push({ text: cur, sym: curSym });
+      cur = "";
+    }
+    curSym = isSym;
+    cur += ch;
+  }
+  if (cur) runs.push({ text: cur, sym: curSym });
+
+  let cx = x;
+  const prevAlign = ctx.textAlign;
+  ctx.textAlign = "left";
+  for (const run of runs) {
+    ctx.font = run.sym ? symbolFont : poppinsFont;
+    ctx.fillText(run.text, cx, y);
+    cx += ctx.measureText(run.text).width;
+  }
+  ctx.textAlign = prevAlign;
+}
+
+/**
+ * Fetches the contestant's hero photo as a Buffer (null on any failure).
+ * Sends browser-like headers because many hosts (CDNs, res.cloudinary
+ * behind referer checks, etc.) reject bare server-side requests.
+ */
 async function fetchPhoto(url) {
-  if (!url || !/^https?:\/\//.test(url)) return null;
+  if (!url) return null;
+  // Allow relative paths by resolving against the app URL
+  const target = /^https?:\/\//.test(url)
+    ? url
+    : `${APP_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+  if (!/^https?:\/\//.test(target)) return null;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
+    const res = await fetch(target, {
+      signal: AbortSignal.timeout(10000),
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        Referer: target,
+      },
+    });
+    if (!res.ok) {
+      console.warn(
+        `[og] photo fetch ${res.status} for contestant photo: ${target}`,
+      );
+      return null;
+    }
     const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length > 0 ? buf : null;
+    if (buf.length <= 100) {
+      console.warn(`[og] photo fetch too small (${buf.length}b): ${target}`);
+      return null;
+    }
+    return buf;
   } catch {
     return null;
   }
+}
+
+/**
+ * Encodes the canvas to a compact image that social platforms will accept.
+ * WhatsApp silently drops preview images above ~300 KB and X above ~5 MB,
+ * so we step down JPEG quality until we fit the budget.
+ */
+function encodeCard(canvas) {
+  for (const q of [92, 82, 70, 55, 40]) {
+    const buf = canvas.toBuffer("image/jpeg", q);
+    if (buf.length <= 280000) return buf;
+  }
+  return canvas.toBuffer("image/jpeg", 30);
+}
+
+/**
+ * Picks the first working photo for the OG card.
+ * Tries the hero image, then falls back through the gallery, so a broken
+ * hero URL never blanks the card — a real photo of the contestant is the
+ * whole point of the preview.
+ */
+async function firstWorkingPhoto(contestant) {
+  const candidates = [contestant.heroImage, ...(contestant.gallery || [])].filter(
+    (u) => typeof u === "string" && /^https?:\/\//.test(u),
+  );
+  for (const url of candidates) {
+    const buf = await fetchPhoto(url);
+    if (buf) return { url, buf };
+  }
+  return { url: null, buf: null };
 }
 
 /**
@@ -72,7 +170,7 @@ export async function voteOg(req, res) {
 <meta property="og:image" content="${escape(ogImage)}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:type" content="image/png">
+<meta property="og:image:type" content="image/jpeg">
 <meta property="og:site_name" content="Rivalry">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${escape(ogTitle)}">
@@ -122,6 +220,25 @@ export async function voteOgImage(req, res) {
       GlobalFonts.register(
         new Uint8Array(await fontRes.arrayBuffer()),
         "Poppins",
+      );
+    }
+  } catch {
+    /* fall back to default font */
+  }
+
+  // Noto Sans symbol subset — Poppins lacks the ₦ (naira) and → glyphs, so we
+  // register a tiny font containing exactly those characters. Money/arrow
+  // strings are drawn with this family; Latin text falls back to Poppins.
+  try {
+    const symRes = await fetch(
+      "https://fonts.gstatic.com/l/font?kit=o-0mIpQlx3QUlC5A4PNB6Ryti20_6n1iPHjcz6L1SoM-jCpoiyD9A99d-1EQT8W7SCE&skey=2b960fe17823056f&v=v42",
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (symRes.ok) {
+      const { GlobalFonts } = await import("@napi-rs/canvas");
+      GlobalFonts.register(
+        new Uint8Array(await symRes.arrayBuffer()),
+        "Noto Sans",
       );
     }
   } catch {
@@ -189,7 +306,6 @@ export async function voteOgImage(req, res) {
   ctx.fillText("Contest — ", 72, 130);
   const contestX = 72 + ctx.measureText("Contest — ").width;
   ctx.fillStyle = "#f0d67c";
-  ctx.font = "700 21px Poppins, sans-serif";
   let contestTitleShown = contestTitle;
   while (
     ctx.measureText(contestTitleShown).width > 420 &&
@@ -198,7 +314,14 @@ export async function voteOgImage(req, res) {
     contestTitleShown = contestTitleShown.slice(0, -2);
   }
   if (contestTitleShown !== contestTitle) contestTitleShown += "…";
-  ctx.fillText(contestTitleShown, contestX, 130);
+  fillMixedText(
+    ctx,
+    contestTitleShown,
+    contestX,
+    130,
+    "700 21px Poppins, sans-serif",
+    nairaFont(700, 21),
+  );
 
   // ----- Contestant name (big, white→gold gradient) -----
   const nameGrad = ctx.createLinearGradient(72, 150, 700, 230);
@@ -220,8 +343,14 @@ export async function voteOgImage(req, res) {
   const prize = contestant.prize || goal;
   const winX = 72 + ctx.measureText("Wants to win ").width;
   ctx.fillStyle = "#ffffff";
-  ctx.font = "700 26px Poppins, sans-serif";
-  ctx.fillText(`${naira(prize)} grand prize`, winX, 268);
+  fillMixedText(
+    ctx,
+    `${naira(prize)} grand prize`,
+    winX,
+    268,
+    "700 26px Poppins, sans-serif",
+    nairaFont(700, 26),
+  );
 
   // ----- Progress bar -----
   const barY = 300;
@@ -241,13 +370,15 @@ export async function voteOgImage(req, res) {
     ctx.fill();
   }
   ctx.fillStyle = "#8d8d8d";
-  ctx.font = "400 17px Poppins, sans-serif";
-  ctx.fillText(
+  fillMixedText(
+    ctx,
     remaining > 0
       ? `${naira(remaining)} votes to go  ·  ${Math.round(progress)}% there`
       : "Goal reached! 🎉",
     72,
     342,
+    "400 17px Poppins, sans-serif",
+    nairaFont(400, 17),
   );
 
   // ----- CTA pill -----
@@ -261,13 +392,33 @@ export async function voteOgImage(req, res) {
   ctx.roundRect(72, ctaY, 388, 62, 31);
   ctx.fill();
   ctx.fillStyle = "#1a1405";
-  ctx.font = "800 25px Poppins, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("VOTE FOR ME →", 266, ctaY + 42);
+  fillMixedText(
+    ctx,
+    "VOTE FOR ME",
+    266 - 12,
+    ctaY + 42,
+    "800 25px Poppins, sans-serif",
+    nairaFont(800, 25),
+  );
+  // Arrow drawn as a path — no font glyph needed
+  ctx.beginPath();
+  const ax = 340, ay = ctaY + 31;
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(ax + 14, ay + 10);
+  ctx.lineTo(ax, ay + 20);
+  ctx.closePath();
+  ctx.fill();
   ctx.textAlign = "left";
   ctx.fillStyle = "#8d8d8d";
-  ctx.font = "400 17px Poppins, sans-serif";
-  ctx.fillText(`${votes.toLocaleString("en-NG")} votes so far`, 72, ctaY + 100);
+  fillMixedText(
+    ctx,
+    `${votes.toLocaleString("en-NG")} votes so far`,
+    72,
+    ctaY + 100,
+    "400 17px Poppins, sans-serif",
+    nairaFont(400, 17),
+  );
 
   // ----- Footer -----
   ctx.fillStyle = "#6f6f6f";
@@ -312,13 +463,20 @@ export async function voteOgImage(req, res) {
   ctx.arc(cx, cy, r + 2, 0, Math.PI * 2);
   ctx.fill();
 
-  // Clip and draw the hero photo in a circle (cover-fit)
-  const photoBuf = await fetchPhoto(contestant.heroImage);
+  // Clip and draw the hero photo in a circle (cover-fit).
+  // Falls back to the gallery if the hero URL is dead, then to a placeholder.
+  const { buf: photoBuf } = await firstWorkingPhoto(contestant);
   let photoDrawn = false;
   if (photoBuf) {
     try {
       const img = new Image();
+      // @napi-rs/canvas decodes asynchronously — without awaiting decode()
+      // drawImage silently paints nothing (the blank-circle bug).
       img.src = photoBuf;
+      await img.decode();
+      if (!(img.width > 0 && img.height > 0)) {
+        throw new Error("decoded image has zero dimensions");
+      }
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -329,7 +487,11 @@ export async function voteOgImage(req, res) {
       ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
       ctx.restore();
       photoDrawn = true;
-    } catch {
+    } catch (err) {
+      console.warn(
+        `[og] could not draw photo for contestant ${id}:`,
+        err instanceof Error ? err.message : err,
+      );
       /* draw placeholder below */
     }
   }
@@ -357,8 +519,8 @@ export async function voteOgImage(req, res) {
   ctx.fillText("CONTESTANT", cx, cy + r + 12);
   ctx.textAlign = "left";
 
-  const png = canvas.toBuffer("image/png");
-  res.set("Content-Type", "image/png");
+  const image = encodeCard(canvas);
+  res.set("Content-Type", "image/jpeg");
   res.set("Cache-Control", "public, max-age=300");
-  res.status(200).send(png);
+  res.status(200).send(image);
 }
