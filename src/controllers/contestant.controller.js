@@ -52,15 +52,31 @@ export async function getContestant(req, res, next) {
     });
     if (!contestant) throw new ApiError(404, "Contestant not found");
     // "Liked by me" must match how the like was stored: userId when logged
-    // in, device fingerprint for guests (falls back to IP).
+    // in, device fingerprint for guests (falls back to IP). A like can live in
+    // the contestant-level Like store (hero heart) OR the per-image ImageLike
+    // store (tapped on the contestant's image) — the heart lights up for both.
     const fingerprint =
       req.body?.deviceId || req.headers["x-device-id"] || "";
     const voterKey =
       req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
-    const likedByMe = await prisma.like.findUnique({
-      where: { contestantId_voterKey: { contestantId: contestant.id, voterKey } },
+    const [likedByMe, heroImageLike] = await Promise.all([
+      prisma.like.findUnique({
+        where: { contestantId_voterKey: { contestantId: contestant.id, voterKey } },
+      }),
+      prisma.imageLike.findFirst({
+        where: {
+          contestantId: contestant.id,
+          image: contestant.heroImage,
+          likerKey: voterKey,
+        },
+        select: { id: true },
+      }),
+    ]);
+    res.json({
+      success: true,
+      contestant,
+      likedByMe: Boolean(likedByMe || heroImageLike),
     });
-    res.json({ success: true, contestant, likedByMe: Boolean(likedByMe) });
   } catch (err) {
     next(err);
   }
@@ -76,6 +92,14 @@ export async function toggleLike(req, res, next) {
     if (!/^[0-9a-fA-F]{24}$/.test(contestantId)) {
       throw new ApiError(404, "Contestant not found");
     }
+    // Fetch the hero image so we can also check the per-image ImageLike store
+    // — a like on the contestant's image lives there, not in the Like store.
+    const contestant = await prisma.contestant.findUnique({
+      where: { id: contestantId },
+      select: { heroImage: true },
+    });
+    if (!contestant) throw new ApiError(404, "Contestant not found");
+
     // Logged-in users key by userId; guests by device fingerprint (header),
     // falling back to IP when no fingerprint was sent.
     const fingerprint =
@@ -83,19 +107,40 @@ export async function toggleLike(req, res, next) {
     const voterKey =
       req.userId || (fingerprint ? `fp:${fingerprint}` : `ip:${req.ip}`);
 
-    const existing = await prisma.like.findUnique({
-      where: { contestantId_voterKey: { contestantId, voterKey } },
-    });
+    const [existing, existingImageLike] = await Promise.all([
+      prisma.like.findUnique({
+        where: { contestantId_voterKey: { contestantId, voterKey } },
+      }),
+      prisma.imageLike.findFirst({
+        where: {
+          contestantId,
+          image: contestant.heroImage,
+          likerKey: voterKey,
+        },
+        select: { id: true },
+      }),
+    ]);
 
-    let liked;
-    if (existing) {
-      await prisma.like.delete({ where: { id: existing.id } });
+    if (existing || existingImageLike) {
+      // Unlike: clear whichever store(s) hold the like (could be both).
+      let removed = 0;
+      if (existing) {
+        await prisma.like.delete({ where: { id: existing.id } });
+        removed++;
+      }
+      if (existingImageLike) {
+        await prisma.imageLike.delete({ where: { id: existingImageLike.id } });
+        removed++;
+      }
       const updated = await prisma.contestant.update({
         where: { id: contestantId },
-        data: { likes: { decrement: 1 } },
+        data: { likes: { decrement: removed } },
       });
-      liked = false;
-      return res.json({ success: true, liked, likes: Math.max(0, updated.likes) });
+      return res.json({
+        success: true,
+        liked: false,
+        likes: Math.max(0, updated.likes),
+      });
     }
 
     await prisma.like.create({ data: { contestantId, voterKey } });
@@ -103,8 +148,7 @@ export async function toggleLike(req, res, next) {
       where: { id: contestantId },
       data: { likes: { increment: 1 } },
     });
-    liked = true;
-    res.json({ success: true, liked, likes: updated.likes });
+    res.json({ success: true, liked: true, likes: updated.likes });
   } catch (err) {
     next(err);
   }
