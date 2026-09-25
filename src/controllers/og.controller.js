@@ -145,7 +145,14 @@ export async function voteOg(req, res) {
   });
   if (!contestant) return res.status(404).send("Contestant not found");
 
-  const deepLink = `${APP_URL}/#/vote/${id}`;
+  // Prefer the host the crawler actually used (custom domain, Vercel alias,
+  // localhost) so the redirect stays on the same origin as the shared link.
+  // Fall back to CLIENT_URL for direct backend hits with no host header.
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const origin = host ? `${proto}://${host}` : APP_URL;
+
+  const deepLink = `${origin}/#/vote/${id}`;
   const name = contestant.name || "Contestant";
   const contestTitle = contestant.contest?.title || "Rivalry Contest";
   const goal = contestant.voteGoal || 25000;
@@ -153,13 +160,12 @@ export async function voteOg(req, res) {
   const remaining = Math.max(0, goal - votes);
 
   // The rendered card PNG - absolute URL using this request's host AND the
-  // same path prefix the crawler used, so the link works both when hit
-  // directly on the backend (/api/og/...) and through the frontend proxy
-  // (/og/...) without extra Vercel rewrites for the image route.
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const basePath = req.path.replace(/\/image$/, ""); // e.g. /og/vote/:id or /api/og/vote/:id
-  const ogImage = `${proto}://${host}${basePath}/image`;
+  // same path prefix the crawler used. Through the Vercel rewrite the backend
+  // sees /api/og/vote/:id, so we strip the /api prefix to rebuild the public
+  // /og/... path that vercel.json actually proxies.
+  const basePath = (req.baseUrl || "") + req.path.replace(/\/image$/, "");
+  const publicPath = basePath.startsWith("/api/") ? basePath.slice(4) : basePath;
+  const ogImage = `${proto}://${host}${publicPath}/image`;
 
   const ogTitle = `Vote ${name} - ${contestTitle} on Rivalry`;
   const ogDesc = `${name} needs ${remaining.toLocaleString("en-NG")} more votes to win ${contestTitle}. Tap to vote for me - it takes 10 seconds!`;
