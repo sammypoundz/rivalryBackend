@@ -361,35 +361,54 @@ export async function createContestant(req, res, next) {
     if (!contestId || !number || !name || !votingEndsAt) {
       throw new ApiError(400, "contestId, number, name and votingEndsAt are required");
     }
-    const contestant = await prisma.contestant.create({
-      data: {
-        contestId,
-        number,
-        name,
-        state,
-        age,
-        occupation,
-        bio,
-        // Only upload raw data URLs — when the hero image is already a hosted
-        // URL (e.g. uploaded via /api/uploads/image in the join flow) keep it
-        // as-is. Re-uploading a URL makes Cloudinary try to fetch it and 500s.
-        heroImage:
-          (typeof heroImage === "string" && heroImage.startsWith("data:image/")
-            ? await uploadToCloudinary(heroImage, "hero")
-            : null) || heroImage,
-        // The contestant's own photo belongs in the gallery too — seed the
-        // gallery with the hero image (plus any extra uploads), de-duplicated.
-        // The public profile filters the hero out of the gallery view so it
-        // never renders twice, but MySpace lets the owner manage it.
-        gallery: Array.from(new Set([heroImage, ...(gallery || [])])).filter(
-          (u) => u,
-        ),
-        voteGoal,
-        votingEndsAt: new Date(votingEndsAt),
-        // Link the entrant so /users/me/contestants works for self sign-up
-        userId: req.user?.id || undefined,
-      },
-    });
+    // A user may join MULTIPLE contests — each join creates its own contestant
+    // record. `number` is globally unique in the schema, so retry with a fresh
+    // wide-range number when a random pick collides with an existing contestant.
+    let entryNumber = Number(number);
+    let contestant = null;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 6 && !contestant; attempt++) {
+      try {
+        contestant = await prisma.contestant.create({
+          data: {
+            contestId,
+            number: entryNumber,
+            name,
+            state,
+            age,
+            occupation,
+            bio,
+            // Only upload raw data URLs — when the hero image is already a hosted
+            // URL (e.g. uploaded via /api/uploads/image in the join flow) keep it
+            // as-is. Re-uploading a URL makes Cloudinary try to fetch it and 500s.
+            heroImage:
+              (typeof heroImage === "string" && heroImage.startsWith("data:image/")
+                ? await uploadToCloudinary(heroImage, "hero")
+                : null) || heroImage,
+            // The contestant's own photo belongs in the gallery too — seed the
+            // gallery with the hero image (plus any extra uploads), de-duplicated.
+            // The public profile filters the hero out of the gallery view so it
+            // never renders twice, but MySpace lets the owner manage it.
+            gallery: Array.from(new Set([heroImage, ...(gallery || [])])).filter(
+              (u) => u,
+            ),
+            voteGoal,
+            votingEndsAt: new Date(votingEndsAt),
+            // Link the entrant so /users/me/contestants works for self sign-up
+            userId: req.user?.id || undefined,
+          },
+        });
+      } catch (e) {
+        // P2002 = unique-constraint violation on `number` — pick another and retry
+        if (e?.code === "P2002") {
+          entryNumber = 100000 + Math.floor(Math.random() * 899999);
+          lastErr = e;
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!contestant) throw lastErr || new ApiError(500, "Could not create contestant");
     res.status(201).json({ success: true, contestant });
   } catch (err) {
     next(err);
