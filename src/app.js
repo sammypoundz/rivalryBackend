@@ -11,6 +11,7 @@ import {
   contestantRouter,
 } from "./routes/contestant.routes.js";
 import { notFound, errorHandler } from "./middleware/error.js";
+import * as voteController from "./controllers/vote.controller.js";
 
 const app = express();
 
@@ -32,6 +33,9 @@ app.use("/api/contests/:contestId/contestants", contestContestantsRouter);
 app.use("/api/contestants", contestantRouter);
 app.use("/api/users", userRoutes);
 app.use("/api/uploads", uploadRoutes);
+
+// Live votes feed (real Vote records across all contests)
+app.get("/api/votes/recent", voteController.listRecentVotes);
 
 // Share-link OG landing pages (crawler-friendly preview + human redirect)
 import { voteOg, voteOgImage } from "./controllers/og.controller.js";

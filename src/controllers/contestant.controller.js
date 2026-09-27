@@ -46,11 +46,22 @@ export async function listByContest(req, res, next) {
 
 export async function getContestant(req, res, next) {
   try {
-    const contestant = await prisma.contestant.findUnique({
+    let contestant = await prisma.contestant.findUnique({
       where: { id: req.params.id },
       include: { contest: true, supporters: { orderBy: { votes: "desc" }, take: 10 } },
     });
     if (!contestant) throw new ApiError(404, "Contestant not found");
+    // Live rank: computed from the CURRENT vote counts in the same contest —
+    // the stored `rank` column is stale seed data, never updated on votes.
+    const liveRank =
+      1 +
+      (await prisma.contestant.count({
+        where: {
+          contestId: contestant.contestId,
+          votes: { gt: contestant.votes },
+        },
+      }));
+    contestant = { ...contestant, rank: liveRank };
     // "Liked by me" must match how the like was stored: userId when logged
     // in, device fingerprint for guests (falls back to IP). A like can live in
     // the contestant-level Like store (hero heart) OR the per-image ImageLike

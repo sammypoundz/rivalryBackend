@@ -5,6 +5,81 @@ import { ApiError } from "../middleware/error.js";
 
 const router = Router();
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^\+?[\d\s\-().]{7,20}$/;
+const normalizePhone = (phone) => phone.replace(/[\s\-().]/g, "");
+// Synthetic values the auth controller stores when a user registered with
+// only one identifier (phone-only or email-only accounts).
+const isSynthetic = (v) =>
+  Boolean(v && (v.endsWith("@phone.rivalry") || v.endsWith("@email.rivalry")));
+
+const publicUser = (u) => ({
+  id: u.id,
+  email: u.email,
+  phone: u.phone ?? null,
+  fullName: u.fullName,
+  avatarUrl: u.avatarUrl,
+  role: u.role,
+});
+
+/**
+ * PATCH /api/users/me
+ * Body: { fullName?, email?, phone? }
+ * Lets the user edit their contact info. Synthetic placeholder values
+ * (phone-only / email-only accounts) are freely replaceable; real values
+ * must stay unique across accounts.
+ */
+router.patch("/me", requireAuth, async (req, res, next) => {
+  try {
+    const { fullName, email, phone } = req.body;
+    const data = {};
+
+    if (fullName !== undefined) {
+      const name = String(fullName).trim();
+      if (name.length < 2) throw new ApiError(400, "Please enter your full name");
+      data.fullName = name;
+    }
+
+    if (email !== undefined) {
+      const value = String(email).trim().toLowerCase();
+      if (!value) throw new ApiError(400, "Email cannot be empty");
+      if (!EMAIL_RE.test(value)) throw new ApiError(400, "Please enter a valid email address");
+      if (value !== req.user.email || isSynthetic(req.user.email)) {
+        const conflict = await prisma.user.findFirst({
+          where: { email: value, id: { not: req.user.id } },
+        });
+        if (conflict) throw new ApiError(409, "Email already registered");
+      }
+      data.email = value;
+    }
+
+    if (phone !== undefined) {
+      const raw = String(phone).trim();
+      if (!raw) throw new ApiError(400, "Phone number cannot be empty");
+      if (!PHONE_RE.test(raw)) throw new ApiError(400, "Please enter a valid phone number");
+      const value = normalizePhone(raw);
+      if (value !== req.user.phone || isSynthetic(req.user.phone)) {
+        const conflict = await prisma.user.findFirst({
+          where: { phone: value, id: { not: req.user.id } },
+        });
+        if (conflict) throw new ApiError(409, "Phone number already registered");
+      }
+      data.phone = value;
+    }
+
+    if (!Object.keys(data).length)
+      throw new ApiError(400, "Nothing to update");
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data,
+    });
+    res.json({ success: true, user: publicUser(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
  * GET /api/users/me/contestants
  * The logged-in user's contestant profiles, with their contest and gallery —

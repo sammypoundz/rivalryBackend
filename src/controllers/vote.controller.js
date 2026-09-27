@@ -174,3 +174,41 @@ export async function listVotes(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * GET /api/votes/recent?contestId=&take=
+ * The most recent REAL votes across the app (or one contest) with their
+ * contestant — powers the live votes feed on the homepage. Every row is an
+ * actual Vote record; nothing is simulated.
+ */
+export async function listRecentVotes(req, res, next) {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(req.query.take) || 30));
+    const contestId = String(req.query.contestId || "");
+    const where = /^[0-9a-fA-F]{24}$/.test(contestId)
+      ? { contestant: { contestId } }
+      : {};
+    const votes = await prisma.vote.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      include: {
+        contestant: {
+          select: {
+            id: true,
+            name: true,
+            number: true,
+            state: true,
+            occupation: true,
+            heroImage: true,
+            votes: true,
+            contestId: true,
+          },
+        },
+      },
+    });
+    res.json({ success: true, votes });
+  } catch (err) {
+    next(err);
+  }
+}
