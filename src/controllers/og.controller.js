@@ -127,6 +127,44 @@ async function firstWorkingPhoto(contestant) {
 }
 
 /**
+ * Registers the OG card fonts (Poppins + the Noto Sans symbol subset that
+ * carries the ₦ glyph). Safe to call multiple times; failures fall back to
+ * the default font silently.
+ */
+async function registerOgFonts() {
+  try {
+    const fontRes = await fetch(
+      "https://fonts.gstatic.com/s/poppins/v21/pxiEyp8kv8JHgFVrJJfecg.woff2",
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (fontRes.ok) {
+      const { GlobalFonts } = await import("@napi-rs/canvas");
+      GlobalFonts.register(
+        new Uint8Array(await fontRes.arrayBuffer()),
+        "Poppins",
+      );
+    }
+  } catch {
+    /* fall back to default font */
+  }
+  try {
+    const symRes = await fetch(
+      "https://fonts.gstatic.com/l/font?kit=o-0mIpQlx3QUlC5A4PNB6Ryti20_6n1iPHjcz6L1SoM-jCpoiyD9A99d-1EQT8W7SCE&skey=2b960fe17823056f&v=v42",
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (symRes.ok) {
+      const { GlobalFonts } = await import("@napi-rs/canvas");
+      GlobalFonts.register(
+        new Uint8Array(await symRes.arrayBuffer()),
+        "Noto Sans",
+      );
+    }
+  } catch {
+    /* fall back to default font */
+  }
+}
+
+/**
  * GET /api/og/vote/:id
  * Share-link landing page for a contestant's voting profile.
  * - Social crawlers get rich OG meta tags; og:image points at the rendered
@@ -220,40 +258,7 @@ export async function voteOgImage(req, res) {
   const progress = Math.min(100, (votes / Math.max(1, goal)) * 100);
 
   // Poppins font (falls back to the default if the fetch fails)
-  try {
-    const fontRes = await fetch(
-      "https://fonts.gstatic.com/s/poppins/v21/pxiEyp8kv8JHgFVrJJfecg.woff2",
-      { signal: AbortSignal.timeout(8000) },
-    );
-    if (fontRes.ok) {
-      const { GlobalFonts } = await import("@napi-rs/canvas");
-      GlobalFonts.register(
-        new Uint8Array(await fontRes.arrayBuffer()),
-        "Poppins",
-      );
-    }
-  } catch {
-    /* fall back to default font */
-  }
-
-  // Noto Sans symbol subset — Poppins lacks the ₦ (naira) and → glyphs, so we
-  // register a tiny font containing exactly those characters. Money/arrow
-  // strings are drawn with this family; Latin text falls back to Poppins.
-  try {
-    const symRes = await fetch(
-      "https://fonts.gstatic.com/l/font?kit=o-0mIpQlx3QUlC5A4PNB6Ryti20_6n1iPHjcz6L1SoM-jCpoiyD9A99d-1EQT8W7SCE&skey=2b960fe17823056f&v=v42",
-      { signal: AbortSignal.timeout(8000) },
-    );
-    if (symRes.ok) {
-      const { GlobalFonts } = await import("@napi-rs/canvas");
-      GlobalFonts.register(
-        new Uint8Array(await symRes.arrayBuffer()),
-        "Noto Sans",
-      );
-    }
-  } catch {
-    /* fall back to default font */
-  }
+  await registerOgFonts();
 
   const { createCanvas, Image } = await import("@napi-rs/canvas");
   const canvas = createCanvas(1200, 630);
@@ -564,18 +569,20 @@ export async function contestOg(req, res) {
     ? `${origin}/#/join?ref=${ref}`
     : `${origin}/#/contest/${id}`;
 
-  const basePath = req.baseUrl + req.path.replace(/\/image$/, "");
+  // og:image — always our DESIGNED card: the contest's cover with the top
+  // prize and the ending date drawn on it (platforms show this image).
+  const basePath = (req.baseUrl || "") + req.path;
   const publicPath = basePath.startsWith("/api/") ? basePath.slice(4) : basePath;
-  // og:image: the contest's own cover image when it's an absolute URL,
-  // otherwise our /image route (which redirects to the absolute cover).
-  const cover = /^https?:\/\//.test(contest.coverImage || "")
-    ? contest.coverImage
-    : `${proto}://${host}${publicPath}/image`;
+  const ogImage = `${proto}://${host}${publicPath}/image`;
 
   const ogTitle = `${contest.title} — Join on Rivalry`;
+  const topPrize = contest.rewards?.[0]?.amount ?? null;
   const ogDesc =
-    contest.tagline ||
-    `${contest.category} contest on Rivalry. Join now, rally votes and win big!`;
+    (topPrize != null
+      ? `Top prize ₦${Number(topPrize).toLocaleString("en-NG")} · `
+      : "") +
+    (contest.tagline ||
+      `${contest.category} contest on Rivalry. Join now, rally votes and win big!`);
 
   const META_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
@@ -584,12 +591,15 @@ export async function contestOg(req, res) {
 <meta property="og:description" content="${escape(ogDesc)}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escape(deepLink)}">
-<meta property="og:image" content="${escape(cover)}">
+<meta property="og:image" content="${escape(ogImage)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/jpeg">
 <meta property="og:site_name" content="Rivalry">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${escape(ogTitle)}">
 <meta name="twitter:description" content="${escape(ogDesc)}">
-<meta name="twitter:image" content="${escape(cover)}">
+<meta name="twitter:image" content="${escape(ogImage)}">
 <meta http-equiv="refresh" content="0;url=${escape(deepLink)}">
 <script>setTimeout(function(){window.location.replace(${JSON.stringify(deepLink)})},50);</script>
 </head>
@@ -601,25 +611,244 @@ export async function contestOg(req, res) {
 
 /**
  * GET /api/og/contest/:id/image
- * Fallback og:image for contests whose coverImage is a relative path —
- * crawlers follow the redirect to the absolute cover URL.
+ * Renders the DESIGNED contest OG card (1200x630): the contest's cover photo
+ * under a dark overlay, the title, the TOP PRIZE pill and the ENDING DATE —
+ * so the WhatsApp/X/Facebook preview sells the contest, not just artwork.
  */
 export async function contestOgImage(req, res) {
   const { id } = req.params;
   if (!/^[0-9a-fA-F]{24}$/.test(id)) {
     return res.status(404).send("Not found");
   }
-  const contest = await prisma.contest.findUnique({
-    where: { id },
-    select: { coverImage: true },
-  });
-  if (!contest?.coverImage) return res.status(404).send("Not found");
+  const contest = await prisma.contest.findUnique({ where: { id } });
+  if (!contest) return res.status(404).send("Not found");
 
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const origin = host ? `${proto}://${host}` : APP_URL;
-  const target = /^https?:\/\//.test(contest.coverImage)
-    ? contest.coverImage
-    : `${origin}${contest.coverImage.startsWith("/") ? "" : "/"}${contest.coverImage}`;
-  return res.redirect(target);
+  await registerOgFonts();
+  const { createCanvas, Image } = await import("@napi-rs/canvas");
+  const canvas = createCanvas(1200, 630);
+  const ctx = canvas.getContext("2d");
+
+  // ----- Background: gold-on-black like the app -----
+  const bg = ctx.createLinearGradient(0, 0, 1200, 630);
+  bg.addColorStop(0, "#101010");
+  bg.addColorStop(0.55, "#0a0a0a");
+  bg.addColorStop(1, "#151005");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // ----- Cover photo: cover-fit across the whole card -----
+  const { buf: coverBuf } = await fetchPhoto(contest.coverImage);
+  if (coverBuf) {
+    try {
+      const img = new Image();
+      img.src = coverBuf;
+      await img.decode();
+      if (img.width > 0 && img.height > 0) {
+        const scale = Math.max(1200 / img.width, 630 / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, (1200 - w) / 2, (630 - h) / 2, w, h);
+      }
+    } catch {
+      /* keep the plain gradient background */
+    }
+  }
+
+  // ----- Dark overlays so the text always reads -----
+  const scrim = ctx.createLinearGradient(0, 0, 0, 630);
+  scrim.addColorStop(0, "rgba(5,5,5,0.55)");
+  scrim.addColorStop(0.45, "rgba(5,5,5,0.72)");
+  scrim.addColorStop(1, "rgba(5,5,5,0.92)");
+  ctx.fillStyle = scrim;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // Inner gold border
+  ctx.strokeStyle = "rgba(212,175,55,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(14, 14, 1172, 602, 26);
+  ctx.stroke();
+
+  ctx.textBaseline = "alphabetic";
+
+  // ----- Brand row -----
+  const brandGrad = ctx.createLinearGradient(72, 40, 114, 82);
+  brandGrad.addColorStop(0, "#f0d67c");
+  brandGrad.addColorStop(1, "#9a7b1e");
+  ctx.fillStyle = brandGrad;
+  ctx.beginPath();
+  ctx.roundRect(72, 40, 42, 42, 12);
+  ctx.fill();
+  ctx.fillStyle = "#1a1405";
+  ctx.font = "800 24px Poppins, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("R", 93, 72);
+
+  ctx.fillStyle = "#d4af37";
+  ctx.font = "600 18px Poppins, sans-serif";
+  ctx.textAlign = "left";
+  ctx.letterSpacing = "6px";
+  ctx.fillText("RIVALRY", 130, 70);
+  ctx.letterSpacing = "0px";
+
+  // Status badge (top right)
+  const statusLabel =
+    contest.status === "voting-live"
+      ? "VOTING LIVE"
+      : contest.status === "upcoming"
+        ? "UPCOMING"
+        : "ENDED";
+  ctx.fillStyle = "rgba(20,20,20,0.85)";
+  ctx.strokeStyle = "#d4af37";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(940, 44, 188, 38, 19);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#f0d67c";
+  ctx.font = "700 16px Poppins, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(statusLabel, 1034, 70);
+  ctx.textAlign = "left";
+
+  // ----- Category + contest title -----
+  ctx.fillStyle = "#d4af37";
+  ctx.font = "700 19px Poppins, sans-serif";
+  ctx.letterSpacing = "3px";
+  ctx.fillText((contest.category || "CONTEST").toUpperCase(), 72, 165);
+  ctx.letterSpacing = "0px";
+
+  const titleGrad = ctx.createLinearGradient(72, 185, 900, 260);
+  titleGrad.addColorStop(0, "#ffffff");
+  titleGrad.addColorStop(1, "#f0d67c");
+  ctx.fillStyle = titleGrad;
+  ctx.font = "800 54px Poppins, sans-serif";
+  let titleShown = contest.title || "Join the Contest";
+  while (ctx.measureText(titleShown).width > 1000 && titleShown.length > 4) {
+    titleShown = titleShown.slice(0, -2);
+  }
+  if (titleShown !== contest.title) titleShown += "…";
+  ctx.fillText(titleShown, 72, 235);
+
+  // ----- Tagline -----
+  ctx.fillStyle = "#bdbdbd";
+  ctx.font = "400 22px Poppins, sans-serif";
+  let tagline = contest.tagline || "Rally votes. Win big. Become the champion.";
+  while (ctx.measureText(tagline).width > 1000 && tagline.length > 4) {
+    tagline = tagline.slice(0, -2);
+  }
+  if (tagline !== contest.tagline) tagline += "…";
+  ctx.fillText(tagline, 72, 285);
+
+  // ----- Prize + ending date pills -----
+  const pillY = 340;
+  const pillH = 62;
+  const topPrize = contest.rewards?.[0]?.amount;
+  const endsAt = contest.endsAt ? new Date(contest.endsAt) : null;
+  const endLabel = endsAt
+    ? `ENDS ${endsAt
+        .toLocaleDateString("en-NG", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+        .toUpperCase()}`
+    : null;
+
+  // Measure both pills first so they sit side by side.
+  ctx.font = "800 24px Poppins, sans-serif";
+  const prizeText = topPrize != null ? naira(topPrize) : null;
+  const prizeLabel = prizeText ? `TOP PRIZE  ${prizeText}` : null;
+  let prizeW = 0;
+  if (prizeLabel) {
+    prizeW =
+      ctx.measureText("TOP PRIZE  ").width +
+      (() => {
+        // measure the ₦ part in the symbol font
+        ctx.font = nairaFont(800, 24);
+        const w = ctx.measureText(prizeText).width;
+        ctx.font = "800 24px Poppins, sans-serif";
+        return w;
+      })() +
+      64;
+  }
+  ctx.font = "800 20px Poppins, sans-serif";
+  const endW = endLabel ? ctx.measureText(endLabel).width + 58 : 0;
+
+  if (prizeLabel) {
+    // Prize pill — solid gold, the hero of the card
+    const prizeGrad = ctx.createLinearGradient(72, pillY, 72 + prizeW, pillY + pillH);
+    prizeGrad.addColorStop(0, "#f0d67c");
+    prizeGrad.addColorStop(0.55, "#d4af37");
+    prizeGrad.addColorStop(1, "#9a7b1e");
+    ctx.fillStyle = prizeGrad;
+    ctx.beginPath();
+    ctx.roundRect(72, pillY, prizeW, pillH, pillH / 2);
+    ctx.fill();
+    ctx.fillStyle = "#1a1405";
+    ctx.font = "800 18px Poppins, sans-serif";
+    ctx.letterSpacing = "2px";
+    ctx.fillText("TOP PRIZE", 104, pillY + 27);
+    ctx.letterSpacing = "0px";
+    ctx.font = "800 27px Poppins, sans-serif";
+    fillMixedText(
+      ctx,
+      prizeText,
+      104,
+      pillY + 52,
+      "800 27px Poppins, sans-serif",
+      nairaFont(800, 27),
+    );
+  }
+  if (endLabel) {
+    const endX = 72 + (prizeLabel ? prizeW + 20 : 0);
+    ctx.fillStyle = "rgba(20,20,20,0.88)";
+    ctx.strokeStyle = "rgba(212,175,55,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(endX, pillY, endW, pillH, pillH / 2);
+    ctx.fill();
+    ctx.stroke();
+    // small clock-ish tick mark
+    ctx.strokeStyle = "#f0d67c";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(endX + 30, pillY + pillH / 2, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(endX + 30, pillY + pillH / 2);
+    ctx.lineTo(endX + 30, pillY + pillH / 2 - 6);
+    ctx.moveTo(endX + 30, pillY + pillH / 2);
+    ctx.lineTo(endX + 36, pillY + pillH / 2 + 2);
+    ctx.stroke();
+    ctx.fillStyle = "#f0d67c";
+    ctx.font = "800 20px Poppins, sans-serif";
+    ctx.fillText(endLabel, endX + 50, pillY + pillH / 2 + 7);
+  }
+
+  // ----- CTA pill -----
+  const ctaY = 470;
+  const ctaGrad = ctx.createLinearGradient(72, ctaY, 472, ctaY + 62);
+  ctaGrad.addColorStop(0, "#f0d67c");
+  ctaGrad.addColorStop(0.55, "#d4af37");
+  ctaGrad.addColorStop(1, "#9a7b1e");
+  ctx.fillStyle = ctaGrad;
+  ctx.beginPath();
+  ctx.roundRect(72, ctaY, 388, 62, 31);
+  ctx.fill();
+  ctx.fillStyle = "#1a1405";
+  ctx.textAlign = "center";
+  ctx.font = "800 25px Poppins, sans-serif";
+  ctx.fillText("JOIN THIS CONTEST", 250, ctaY + 41);
+  ctx.textAlign = "left";
+
+  // ----- Footer -----
+  ctx.fillStyle = "#8d8d8d";
+  ctx.font = "400 15px Poppins, sans-serif";
+  ctx.fillText("RIVALRY · RALLY YOUR SUPPORTERS", 72, 596);
+
+  const image = encodeCard(canvas);
+  res.set("Content-Type", "image/jpeg");
+  res.set("Cache-Control", "public, max-age=300");
+  res.status(200).send(image);
 }
