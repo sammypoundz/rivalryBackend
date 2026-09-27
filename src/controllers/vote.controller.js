@@ -25,18 +25,55 @@ async function maybeQualifyReferral(contestant) {
     // Invites are keyed by the REFERRER's id — get it from the referred user
     const user = await prisma.user.findUnique({
       where: { id: contestant.userId },
-      select: { referredById: true },
+      select: { referredById: true, fullName: true, email: true, phone: true },
     });
     if (!user?.referredById) return;
-    await prisma.referralInvite.updateMany({
-      where: {
-        referrerId: user.referredById,
-        status: "Signed up",
-        // Qualify invites for this contest, or invites with no contest set
-        OR: [{ contestId: contestant.contestId }, { contestId: null }],
-      },
+
+    // Ids of invites that belong to this signup: tied to this contest, or
+    // not tied to any contest (a plain link share). "Signed up" rows are
+    // created by the register controller for the actual referred person.
+    const baseWhere = {
+      referrerId: user.referredById,
+      OR: [{ contestId: contestant.contestId }, { contestId: null }],
+    };
+    const qualified = await prisma.referralInvite.updateMany({
+      where: { ...baseWhere, status: "Signed up" },
       data: { status: "Qualified", reward: REFERRAL_REWARD },
     });
+
+    // The invite may never have been flipped to "Signed up" (e.g. an older
+    // row with a non-matching contact). The referredById link on the user is
+    // the source of truth — stamp the referred person's name onto a leftover
+    // invite and credit it, so the reward never gets lost.
+    if (qualified.count === 0) {
+      const leftover = await prisma.referralInvite.findFirst({
+        where: { ...baseWhere, status: "Invited" },
+        orderBy: { createdAt: "desc" },
+      });
+      if (leftover) {
+        await prisma.referralInvite.update({
+          where: { id: leftover.id },
+          data: {
+            status: "Qualified",
+            reward: REFERRAL_REWARD,
+            name: user.fullName,
+            contact: (user.email || user.phone || leftover.contact) ?? leftover.contact,
+          },
+        });
+      } else {
+        // No row at all — credit the referral with the real person's name.
+        await prisma.referralInvite.create({
+          data: {
+            referrerId: user.referredById,
+            name: user.fullName,
+            contact: user.email || user.phone || "signup via link",
+            status: "Qualified",
+            reward: REFERRAL_REWARD,
+            contestId: contestant.contestId,
+          },
+        });
+      }
+    }
   } catch {
     /* referral unlock is best-effort — voting must still succeed */
   }
@@ -99,7 +136,10 @@ export async function vote(req, res, next) {
             },
             update: { votes: { increment: amount } },
           })
-        : prisma.vote.create({ data: { contestantId, userId, amount } }),
+        : prisma.contestant.findUnique({
+            where: { id: contestantId },
+            select: { id: true }, // no-op — the Vote row was already created above
+          }),
     ]);
 
     // Recompute badge from cumulative supporter votes (re-fetch to be safe)

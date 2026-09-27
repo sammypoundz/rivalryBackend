@@ -82,24 +82,38 @@ export async function register(req, res, next) {
       },
     });
 
-    // If this signup came through a referral link, mark the invite the
-    // referrer sent as "Signed up". The ₦500 reward only becomes Qualified
-    // (redeemable) once the referred person's contestant earns ≥5 votes —
-    // see maybeQualifyReferral in the vote controller.
+    // Referral credit — only for a REAL signup through the referrer's link.
+    // We don't rely on a pre-recorded invite (contacts often don't match);
+    // instead we create/claim an invite row carrying the new user's real
+    // name + contact, so the referrer's Earn/Wallet lists show who joined.
     if (referredBy && /^[0-9a-fA-F]{24}$/.test(String(referredBy))) {
       try {
         const contacts = [normalizedEmail, normalizedPhone]
           .filter(Boolean)
           .map((c) => String(c).toLowerCase());
-        await prisma.referralInvite.updateMany({
+        // Claim a pre-existing "Invited" row for this contact if there is one
+        const claimed = await prisma.referralInvite.updateMany({
           where: {
             referrerId: String(referredBy),
             status: "Invited",
             contact: { in: contacts },
           },
           // Signed up but NOT yet redeemable — unlocks at 5 votes
-          data: { status: "Signed up", reward: 0 },
+          data: { status: "Signed up", reward: 0, name: fullName },
         });
+        // No invite was pre-recorded (plain link share) — record the real
+        // signup itself so the referrer sees exactly who joined via them.
+        if (claimed.count === 0) {
+          await prisma.referralInvite.create({
+            data: {
+              referrerId: String(referredBy),
+              name: fullName,
+              contact: contacts[0] ?? "signup via link",
+              status: "Signed up",
+              reward: 0,
+            },
+          });
+        }
       } catch {
         /* referral crediting is best-effort — signup still succeeds */
       }

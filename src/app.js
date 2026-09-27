@@ -42,6 +42,11 @@ import { voteOg, voteOgImage } from "./controllers/og.controller.js";
 app.get("/api/og/vote/:id", voteOg);
 app.get("/api/og/vote/:id/image", voteOgImage);
 
+// Contest share links: crawler-friendly OG preview of the contest cover + title
+import { contestOg, contestOgImage } from "./controllers/og.controller.js";
+app.get("/api/og/contest/:id", contestOg);
+app.get("/api/og/contest/:id/image", contestOgImage);
+
 app.use(notFound);
 app.use(errorHandler);
 

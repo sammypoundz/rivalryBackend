@@ -534,3 +534,92 @@ export async function voteOgImage(req, res) {
   res.set("Cache-Control", "public, max-age=300");
   res.status(200).send(image);
 }
+/**
+ * GET /api/og/contest/:id
+ * Share-link landing page for a CONTEST (Refer a Friend / share links).
+ * - Social crawlers get OG meta tags with the contest's own cover image as
+ *   og:image, so WhatsApp/X/Facebook show the contest artwork.
+ * - Real visitors are redirected into the app: to the contest detail page,
+ *   or straight to the join/signup flow when the link carries ?ref=<userId>
+ *   (the ref is preserved so the referral is credited on signup).
+ */
+export async function contestOg(req, res) {
+  const { id } = req.params;
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) {
+    return res.status(404).send("Contest not found");
+  }
+
+  const contest = await prisma.contest.findUnique({ where: { id } });
+  if (!contest) return res.status(404).send("Contest not found");
+
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const origin = host ? `${proto}://${host}` : APP_URL;
+
+  // Preserve a referral attribution passed through the share link (?ref=…)
+  const ref = /^[0-9a-fA-F]{24}$/.test(String(req.query.ref || ""))
+    ? String(req.query.ref)
+    : null;
+  const deepLink = ref
+    ? `${origin}/#/join?ref=${ref}`
+    : `${origin}/#/contest/${id}`;
+
+  const basePath = req.baseUrl + req.path.replace(/\/image$/, "");
+  const publicPath = basePath.startsWith("/api/") ? basePath.slice(4) : basePath;
+  // og:image: the contest's own cover image when it's an absolute URL,
+  // otherwise our /image route (which redirects to the absolute cover).
+  const cover = /^https?:\/\//.test(contest.coverImage || "")
+    ? contest.coverImage
+    : `${proto}://${host}${publicPath}/image`;
+
+  const ogTitle = `${contest.title} — Join on Rivalry`;
+  const ogDesc =
+    contest.tagline ||
+    `${contest.category} contest on Rivalry. Join now, rally votes and win big!`;
+
+  const META_HTML = `<!doctype html>
+<html><head><meta charset="utf-8">
+<title>${escape(ogTitle)}</title>
+<meta property="og:title" content="${escape(ogTitle)}">
+<meta property="og:description" content="${escape(ogDesc)}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${escape(deepLink)}">
+<meta property="og:image" content="${escape(cover)}">
+<meta property="og:site_name" content="Rivalry">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escape(ogTitle)}">
+<meta name="twitter:description" content="${escape(ogDesc)}">
+<meta name="twitter:image" content="${escape(cover)}">
+<meta http-equiv="refresh" content="0;url=${escape(deepLink)}">
+<script>setTimeout(function(){window.location.replace(${JSON.stringify(deepLink)})},50);</script>
+</head>
+<body></body></html>`;
+
+  res.set("Cache-Control", "public, max-age=300");
+  return res.status(200).type("html").send(META_HTML);
+}
+
+/**
+ * GET /api/og/contest/:id/image
+ * Fallback og:image for contests whose coverImage is a relative path —
+ * crawlers follow the redirect to the absolute cover URL.
+ */
+export async function contestOgImage(req, res) {
+  const { id } = req.params;
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) {
+    return res.status(404).send("Not found");
+  }
+  const contest = await prisma.contest.findUnique({
+    where: { id },
+    select: { coverImage: true },
+  });
+  if (!contest?.coverImage) return res.status(404).send("Not found");
+
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const origin = host ? `${proto}://${host}` : APP_URL;
+  const target = /^https?:\/\//.test(contest.coverImage)
+    ? contest.coverImage
+    : `${origin}${contest.coverImage.startsWith("/") ? "" : "/"}${contest.coverImage}`;
+  return res.redirect(target);
+}
