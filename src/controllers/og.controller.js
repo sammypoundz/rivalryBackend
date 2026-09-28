@@ -566,7 +566,10 @@ export async function contestOg(req, res) {
     ? String(req.query.ref)
     : null;
   const deepLink = ref
-    ? `${origin}/#/join?ref=${ref}`
+    ? // The contest id rides along so the signup screen registers the friend
+      // into THIS contest (not just the newest live one) and can show which
+      // contest they are joining.
+      `${origin}/#/join?ref=${ref}&contest=${id}`
     : `${origin}/#/contest/${id}`;
 
   // og:image — always our DESIGNED card: the contest's cover with the top
