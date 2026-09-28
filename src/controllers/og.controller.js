@@ -637,7 +637,10 @@ export async function contestOgImage(req, res) {
   ctx.fillRect(0, 0, 1200, 630);
 
   // ----- Cover photo: cover-fit across the whole card -----
-  const { buf: coverBuf } = await fetchPhoto(contest.coverImage);
+  // NOTE: fetchPhoto returns the Buffer directly (unlike firstWorkingPhoto,
+  // which returns {url, buf}) — destructuring {buf} here silently yielded
+  // undefined and the card always rendered without its background image.
+  const coverBuf = await fetchPhoto(contest.coverImage);
   if (coverBuf) {
     try {
       const img = new Image();
@@ -648,19 +651,36 @@ export async function contestOgImage(req, res) {
         const w = img.width * scale;
         const h = img.height * scale;
         ctx.drawImage(img, (1200 - w) / 2, (630 - h) / 2, w, h);
+        console.log(`[og:debug] cover drawn ${w}x${h}`);
       }
-    } catch {
-      /* keep the plain gradient background */
+    } catch (err) {
+      console.warn(
+        "[og] cover draw failed:",
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
   // ----- Dark overlays so the text always reads -----
   const scrim = ctx.createLinearGradient(0, 0, 0, 630);
-  scrim.addColorStop(0, "rgba(5,5,5,0.55)");
-  scrim.addColorStop(0.45, "rgba(5,5,5,0.72)");
-  scrim.addColorStop(1, "rgba(5,5,5,0.92)");
+  // Lighter scrim: the hero photo must stay clearly visible as the card's
+  // background (it was so dark before the preview looked like a plain
+  // gradient). A soft top band + a stronger bottom band keeps text readable
+  // without hiding the artwork.
+  scrim.addColorStop(0, "rgba(5,5,5,0.32)");
+  scrim.addColorStop(0.35, "rgba(5,5,5,0.45)");
+  scrim.addColorStop(1, "rgba(5,5,5,0.78)");
   ctx.fillStyle = scrim;
   ctx.fillRect(0, 0, 1200, 630);
+
+  // Extra dark band behind the title/tagline/prize text so it always reads
+  // even over a bright photo area.
+  const textBand = ctx.createLinearGradient(0, 100, 0, 430);
+  textBand.addColorStop(0, "rgba(5,5,5,0)");
+  textBand.addColorStop(0.5, "rgba(5,5,5,0.42)");
+  textBand.addColorStop(1, "rgba(5,5,5,0)");
+  ctx.fillStyle = textBand;
+  ctx.fillRect(0, 100, 1200, 330);
 
   // Inner gold border
   ctx.strokeStyle = "rgba(212,175,55,0.35)";
