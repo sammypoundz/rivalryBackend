@@ -422,9 +422,22 @@ async function main() {
   console.log("✅ Seed complete");
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+/**
+ * Only seed when this file is RUN directly (`npm run seed`), never when it's
+ * merely imported — contest.controller.js imports defaultContestCover from
+ * here, so without this guard every server boot (incl. every nodemon restart)
+ * wiped and reseeded the whole database. A restart landing mid-seed then
+ * crashed with the Contest/Contestant relation violation (P2014), taking the
+ * whole API down (ECONNREFUSED on every request, login included).
+ */
+import { fileURLToPath } from "node:url";
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main()
+    .then(() => prisma.$disconnect())
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}
+
