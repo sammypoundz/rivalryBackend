@@ -81,6 +81,70 @@ router.patch("/me", requireAuth, async (req, res, next) => {
 });
 
 /**
+ * POST /api/users/me/become-organiser
+ * Self-upgrade: any signed-in user can become an organiser so they can
+ * create and manage their own contests from the organiser dashboard.
+ */
+router.post("/me/become-organiser", requireAuth, async (req, res, next) => {
+  try {
+    if (req.user.role === "admin") {
+      return res.json({ success: true, role: "admin" });
+    }
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { role: "organiser" },
+    });
+    res.json({ success: true, role: user.role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/users/me/organised-contests
+ * Contests the logged-in organiser (or admin) created, with roster counts —
+ * powers the organiser dashboard list.
+ */
+router.get("/me/organised-contests", requireAuth, async (req, res, next) => {
+  try {
+    const where =
+      req.user.role === "admin" ? {} : { organiserId: req.user.id };
+    const contests = await prisma.contest.findMany({
+      where,
+      include: { contestants: { orderBy: { votes: "desc" } } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({
+      success: true,
+      contests: contests.map((c) => ({
+        id: c.id,
+        title: c.title,
+        tagline: c.tagline,
+        category: c.category,
+        coverImage: c.coverImage,
+        status: c.status,
+        startsAt: c.startsAt,
+        endsAt: c.endsAt,
+        votePrice: c.votePrice,
+        entryFee: c.entryFee,
+        totalVotes: c.totalVotes,
+        rewards: c.rewards,
+        contestantCount: c.contestants.length,
+        contestants: c.contestants.slice(0, 8).map((ct) => ({
+          id: ct.id,
+          name: ct.name,
+          number: ct.number,
+          heroImage: ct.heroImage,
+          votes: ct.votes,
+        })),
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/users/me/contestants
  * The logged-in user's contestant profiles, with their contest and gallery —
  * i.e. the contests they have entered.

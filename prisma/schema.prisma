@@ -17,7 +17,7 @@ model User {
   password  String
   fullName  String
   avatarUrl String?
-  role      String   @default("user") // user | admin
+  role      String   @default("user") // user | organiser | admin
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -25,6 +25,7 @@ model User {
   supporters Supporter[]
   bookmarks  Bookmark[]
   contestants Contestant[]
+  organisedContests Contest[] @relation("OrganisedContests")
 
   // Referrals: the user who invited this person (via a share link), and the
   // invites this person has sent out
@@ -43,6 +44,10 @@ model Contest {
   status      String    @default("upcoming") // upcoming | voting-live | ended
   startsAt    DateTime?
   endsAt      DateTime
+  /** Price per vote in Naira, set by the organiser (default ₦100). */
+  votePrice   Int       @default(100)
+  /** Entry fee in Naira (0 = free to enter). */
+  entryFee    Int       @default(0)
   totalVotes  Int       @default(0)
   rewards     Reward[]
   createdAt   DateTime  @default(now())
@@ -50,6 +55,11 @@ model Contest {
 
   contestants Contestant[]
 
+  // Organiser that created this contest (null for admin-created or seeded)
+  organiserId  String? @db.ObjectId
+  organiser    User?   @relation("OrganisedContests", fields: [organiserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+
+  @@index([organiserId])
   @@map("contests")
 }
 

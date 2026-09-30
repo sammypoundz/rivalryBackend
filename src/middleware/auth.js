@@ -44,3 +44,11 @@ export function requireAdmin(req, _res, next) {
     return next(new ApiError(403, "Admin access required"));
   next();
 }
+
+/** Contest creation/management: admins and organiser accounts. */
+export function requireOrganiser(req, res, next) {
+  const role = req.user?.role;
+  if (role !== "admin" && role !== "organiser")
+    return next(new ApiError(403, "Organiser access required"));
+  next();
+}
