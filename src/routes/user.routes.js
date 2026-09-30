@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../config/prisma.js";
+import { deriveStatus, syncStatuses } from "../controllers/contest.controller.js";
 import { requireAuth } from "../middleware/auth.js";
 import { ApiError } from "../middleware/error.js";
 
@@ -107,6 +108,7 @@ router.post("/me/become-organiser", requireAuth, async (req, res, next) => {
  */
 router.get("/me/organised-contests", requireAuth, async (req, res, next) => {
   try {
+    await syncStatuses();
     const where =
       req.user.role === "admin" ? {} : { organiserId: req.user.id };
     const contests = await prisma.contest.findMany({
