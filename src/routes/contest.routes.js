@@ -6,6 +6,7 @@ const router = Router();
 
 router.get("/", contest.listContests);
 router.get("/:id", contest.getContest);
+router.get("/:id/revenue", requireAuth, requireOrganiser, contest.contestRevenue);
 // Organisers (self-upgraded) and admins can create/manage contests.
 // Non-admins may only touch contests they created (organiserId).
 router.post("/", requireAuth, requireOrganiser, contest.createContest);

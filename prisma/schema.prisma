@@ -27,6 +27,9 @@ model User {
   contestants Contestant[]
   organisedContests Contest[] @relation("OrganisedContests")
 
+  // Organiser applications the user has submitted (latest is the active one)
+  organizerApplications OrganizerApplication[]
+
   // Referrals: the user who invited this person (via a share link), and the
   // invites this person has sent out
   referredById String? @db.ObjectId
@@ -196,4 +199,25 @@ model ReferralInvite {
 
   @@index([referrerId])
   @@map("referral_invites")
+}
+
+/// An application a signed-in user submits to become an organiser.
+/// Applications stay "pending" until an admin approves (user.role → organiser)
+/// or rejects them. Only approved users can create/manage contests.
+model OrganizerApplication {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  fullName  String
+  email     String
+  phone     String
+  reason    String
+  status    String   @default("pending") // pending | approved | rejected
+  createdAt DateTime @default(now())
+  reviewedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("organizer_applications")
 }
