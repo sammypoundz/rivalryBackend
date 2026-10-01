@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth.routes.js";
 import contestRoutes from "./routes/contest.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
 import {
   contestContestantsRouter,
   contestantRouter,
@@ -32,6 +33,8 @@ app.use("/api/contests", contestRoutes);
 app.use("/api/contests/:contestId/contestants", contestContestantsRouter);
 app.use("/api/contestants", contestantRouter);
 app.use("/api/users", userRoutes);
+// Admin dashboard (every route inside already enforces requireAuth + requireAdmin)
+app.use("/api/admin", adminRoutes);
 app.use("/api/uploads", uploadRoutes);
 
 // Live votes feed (real Vote records across all contests)
