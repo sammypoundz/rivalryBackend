@@ -152,6 +152,38 @@ model Vote {
   @@map("votes")
 }
 
+/// A payment attempt for a batch of votes. Created when a dynamic KoboPoint
+/// virtual account is generated on the voting page; the webhook (or the
+/// poll-status fallback) credits the votes once the transfer lands.
+model PaymentIntent {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  reference       String   @unique // our externalReference sent to KoboPoint
+  contestantId    String   @db.ObjectId
+  contestId       String   @db.ObjectId
+  userId          String?  @db.ObjectId
+  supporterName   String?
+  votes           Int      // number of votes the payment buys
+  amount          Int      // Naira expected (votes × votePrice)
+  status          String   @default("pending") // pending | paid | expired
+  // KoboPoint virtual account details shown to the payer
+  accountNumber   String?
+  accountName     String?
+  bankName        String?
+  reservedAccountId String?
+  // From the webhook when paid
+  paidReference   String?  // KoboPoint data.reference
+  paidAmount      Int?
+  senderName      String?
+  senderBank      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  expiresAt       DateTime
+
+  @@index([contestantId])
+  @@index([status])
+  @@map("payment_intents")
+}
+
 model Supporter {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
   contestantId String   @db.ObjectId

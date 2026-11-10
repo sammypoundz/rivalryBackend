@@ -21,4 +21,13 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
   cloudinaryCloud: process.env.CLOUDINARY_CLOUD_NAME || "",
+  // KoboPoint payment gateway (dynamic virtual accounts for votes)
+  kobopointBaseUrl: process.env.KOBOPOINT_BASE_URL || "https://app.kobopoint.com/api",
+  kobopointSecretKey: process.env.KOBOPOINT_SECRET_KEY || "",
+  kobopointApiKey: process.env.KOBOPOINT_API_KEY || "",
+  kobopointBusinessId: process.env.KOBOPOINT_BUSINESS_ID || "",
+  kobopointBankCodes: (process.env.KOBOPOINT_BANK_CODES || "100033")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 };

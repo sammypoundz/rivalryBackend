@@ -13,10 +13,19 @@ import {
 } from "./routes/contestant.routes.js";
 import { notFound, errorHandler } from "./middleware/error.js";
 import * as voteController from "./controllers/vote.controller.js";
+import paymentRoutes from "./routes/payment.routes.js";
+import { kobopointWebhook } from "./controllers/payment.controller.js";
 
 const app = express();
 
 app.use(cors({ origin: config.clientUrls, credentials: true }));
+// KoboPoint webhook FIRST and with express.raw: signature verification must
+// hash the exact raw request bytes, not a re-serialized JSON body.
+app.post(
+  "/api/webhooks/kobopoint",
+  express.raw({ type: "application/json" }),
+  kobopointWebhook,
+);
 app.use(express.json({ limit: "10mb" }));
 app.use(morgan("dev"));
 
@@ -37,6 +46,8 @@ app.use("/api/users", userRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/uploads", uploadRoutes);
 
+// Payments: dynamic KoboPoint virtual accounts for voting
+app.use("/api/payments", paymentRoutes);
 // Live votes feed (real Vote records across all contests)
 app.get("/api/votes/recent", voteController.listRecentVotes);
 
@@ -49,6 +60,9 @@ app.get("/api/og/vote/:id/image", voteOgImage);
 import { contestOg, contestOgImage } from "./controllers/og.controller.js";
 app.get("/api/og/contest/:id", contestOg);
 app.get("/api/og/contest/:id/image", contestOgImage);
+
+// Payments: dynamic KoboPoint virtual accounts for voting
+app.use("/api/payments", paymentRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

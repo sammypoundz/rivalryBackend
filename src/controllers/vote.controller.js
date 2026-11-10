@@ -13,6 +13,83 @@ function badgeFor(totalVotes) {
 const REFERRAL_MIN_VOTES = 5;
 const REFERRAL_REWARD = 500;
 
+/** Recompute the badge tier for a supporter's cumulative vote total. */
+async function refreshBadge(contestantId, supporterName) {
+  if (!supporterName) return null;
+  const existing = await prisma.supporter.findUnique({
+    where: { contestantId_name: { contestantId, name: supporterName } },
+  });
+  if (!existing) return null;
+  const total = await prisma.vote.aggregate({
+    where: { contestantId, supporterName },
+    _sum: { amount: true },
+  });
+  const badge = badgeFor(total._sum.amount || 0);
+  return badge === existing.badge
+    ? existing
+    : prisma.supporter.update({ where: { id: existing.id }, data: { badge } });
+}
+
+/**
+ * Credit a batch of paid votes for one contestant atomically — shared by
+ * the direct vote endpoint and the KoboPoint webhook.
+ * @returns {{ votes: number, contestantVotes: number, supporter: object|null }}
+ */
+export async function creditPaidVotes({
+  contestantId,
+  amount,
+  supporterName,
+  userId,
+  reference,
+}) {
+  const contestant = await prisma.contestant.findUnique({
+    where: { id: contestantId },
+  });
+  if (!contestant) throw new ApiError(404, "Contestant not found");
+
+  const [voteDoc, contestantUpdated] = await prisma.$transaction([
+    prisma.vote.create({
+      data: {
+        contestantId,
+        userId: userId || null,
+        supporterName: supporterName || null,
+        amount,
+        reference: reference || null,
+      },
+    }),
+    prisma.contestant.update({
+      where: { id: contestantId },
+      data: { votes: { increment: amount } },
+    }),
+    prisma.contest.update({
+      where: { id: contestant.contestId },
+      data: { totalVotes: { increment: amount } },
+    }),
+    supporterName
+      ? prisma.supporter.upsert({
+          where: { contestantId_name: { contestantId, name: supporterName } },
+          create: {
+            contestantId,
+            userId: userId || null,
+            name: supporterName,
+            initials: supporterName
+              .split(" ")
+              .map((p) => p[0])
+              .join("")
+              .slice(0, 2)
+              .toUpperCase(),
+            votes: amount,
+          },
+          update: { votes: { increment: amount } },
+        })
+      : prisma.contestant.findUnique({ where: { id: contestantId }, select: { id: true } }),
+  ]);
+
+  const supporterFinal = await refreshBadge(contestantId, supporterName);
+  await maybeQualifyReferral(contestantUpdated);
+  return { vote: voteDoc, contestantUpdated, supporter: supporterFinal };
+}
+
 /**
  * Best-effort: when a contestant backed by a referral crosses the minimum
  * vote count, flip their referrer's invite to "Qualified" (reward unlocked).
@@ -100,71 +177,14 @@ export async function vote(req, res, next) {
       throw new ApiError(400, "Voting has ended for this contestant");
     }
 
-    const [vote, contestantUpdated, supporter] = await prisma.$transaction([
-      prisma.vote.create({
-        data: {
-          contestantId,
-          userId,
-          supporterName,
-          amount,
-          reference: req.body.reference || null,
-          ipAddress: req.ip,
-        },
-      }),
-      prisma.contestant.update({
-        where: { id: contestantId },
-        data: { votes: { increment: amount } },
-      }),
-      prisma.contest.update({
-        where: { id: contestant.contestId },
-        data: { totalVotes: { increment: amount } },
-      }),
-      supporterName
-        ? prisma.supporter.upsert({
-            where: { contestantId_name: { contestantId, name: supporterName } },
-            create: {
-              contestantId,
-              userId,
-              name: supporterName,
-              initials: supporterName
-                .split(" ")
-                .map((p) => p[0])
-                .join("")
-                .slice(0, 2)
-                .toUpperCase(),
-              votes: amount,
-            },
-            update: { votes: { increment: amount } },
-          })
-        : prisma.contestant.findUnique({
-            where: { id: contestantId },
-            select: { id: true }, // no-op — the Vote row was already created above
-          }),
-    ]);
-
-    // Recompute badge from cumulative supporter votes (re-fetch to be safe)
-    let supporterFinal = null;
-    if (supporterName) {
-      const existing = await prisma.supporter.findUnique({
-        where: { contestantId_name: { contestantId, name: supporterName } },
+    const { vote, contestantUpdated, supporter: supporterFinal } =
+      await creditPaidVotes({
+        contestantId,
+        amount,
+        supporterName,
+        userId,
+        reference: req.body.reference || null,
       });
-      if (existing) {
-        const total = await prisma.vote.aggregate({
-          where: { contestantId, supporterName },
-          _sum: { amount: true },
-        });
-        const badge = badgeFor(total._sum.amount || 0);
-        supporterFinal = badge === existing.badge
-          ? existing
-          : await prisma.supporter.update({
-              where: { id: existing.id },
-              data: { badge },
-            });
-      }
-    }
-
-    // Unlock the referrer's ₦500 once the referred contestant reaches 5 votes
-    await maybeQualifyReferral(contestantUpdated);
 
     res.status(201).json({
       success: true,

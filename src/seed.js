@@ -11,8 +11,10 @@ export const defaultContestCover =
 async function main() {
   console.log("🌱 Seeding database...");
 
-  // Idempotent seed: wipe previous demo data so re-running never duplicates.
-  console.log("  ↺ Clearing old demo data…");
+  // Wipe EVERYTHING contest-related (this also clears payment intents so no
+  // orphaned dynamic accounts reference deleted contestants).
+  console.log("  ↺ Clearing all contests and related data…");
+  await prisma.paymentIntent.deleteMany();
   await prisma.supporter.deleteMany();
   await prisma.vote.deleteMany();
   await prisma.like.deleteMany();
@@ -33,20 +35,19 @@ async function main() {
   });
   console.log("  ✓ Admin user:", admin.email, "(password: Admin123!)");
 
-  const endsSoon = new Date(
-    Date.now() + 2 * day + 7 * 3600 * 1000 + 42 * 60 * 1000,
-  );
+  // ---------- The one active contest ----------
+  const endsIn14d = new Date(Date.now() + 14 * day);
 
-  const contest1 = await prisma.contest.create({
+  const contest = await prisma.contest.create({
     data: {
-      title: "Face of Rivalry 2025",
+      title: "Face of Rivalry 2026",
       tagline: "The ultimate crown. One winner takes it all.",
       category: "Pageant",
       coverImage:
         "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?q=80&w=1200&auto=format&fit=crop",
       status: "voting-live",
-      endsAt: endsSoon,
-      totalVotes: 67547,
+      endsAt: endsIn14d,
+      totalVotes: 0,
       rewards: [
         {
           position: "1st Place",
@@ -79,11 +80,9 @@ async function main() {
               "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?q=80&w=600&auto=format&fit=crop",
               "https://images.unsplash.com/photo-1517841905240-472988babdf9?q=80&w=600&auto=format&fit=crop",
             ],
-            votes: 20487,
             voteGoal: 25000,
-            rank: 1,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
           {
             number: 7,
@@ -93,13 +92,11 @@ async function main() {
             occupation: "Medical Student",
             bio: "Zainab is a final-year medical student who founded a rural health outreach program.",
             heroImage:
-              "https://images.unsplash.com/photo-1580489944761-15a19d654956?q=80&w=1200&auto=format&fit=crop",
+              "https://images.unsplash.com/photo-1580489944761-15a19d65495c?q=80&w=1200&auto=format&fit=crop",
             gallery: [],
-            votes: 18320,
             voteGoal: 25000,
-            rank: 2,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
           {
             number: 21,
@@ -111,11 +108,9 @@ async function main() {
             heroImage:
               "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=1200&auto=format&fit=crop",
             gallery: [],
-            votes: 15980,
             voteGoal: 25000,
-            rank: 3,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
           {
             number: 3,
@@ -127,11 +122,9 @@ async function main() {
             heroImage:
               "https://images.unsplash.com/photo-1589156280159-27698a70f29e?q=80&w=1200&auto=format&fit=crop",
             gallery: [],
-            votes: 12760,
             voteGoal: 25000,
-            rank: 4,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
           {
             number: 15,
@@ -143,11 +136,9 @@ async function main() {
             heroImage:
               "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?q=80&w=1200&auto=format&fit=crop",
             gallery: [],
-            votes: 10130,
             voteGoal: 25000,
-            rank: 5,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
           {
             number: 9,
@@ -159,276 +150,28 @@ async function main() {
             heroImage:
               "https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=1200&auto=format&fit=crop",
             gallery: [],
-            votes: 8645,
             voteGoal: 25000,
-            rank: 6,
             prize: 50000,
-            votingEndsAt: endsSoon,
+            votingEndsAt: endsIn14d,
           },
         ],
       },
     },
   });
 
-  // Seed supporters on the first contestant
-  const amara = await prisma.contestant.findFirst({
-    where: { name: "Amara Okafor" },
-  });
-  await prisma.supporter.createMany({
-    data: [
-      {
-        contestantId: amara.id,
-        name: "Chidi Oke",
-        initials: "CO",
-        votes: 4200,
-        badge: "Diamond",
-      },
-      {
-        contestantId: amara.id,
-        name: "Zainab Bello",
-        initials: "ZB",
-        votes: 3250,
-        badge: "Gold",
-      },
-      {
-        contestantId: amara.id,
-        name: "Tunde Adeyemi",
-        initials: "TA",
-        votes: 2100,
-        badge: "Gold",
-      },
-    ],
-  });
-
-  console.log("  ✓ Contest:", contest1.title);
-
-  // ---------- Contest 2: Rising Star Challenge (voting live) ----------
-  const endsIn9d = new Date(Date.now() + 9 * day);
-  const contest2 = await prisma.contest.create({
-    data: {
-      title: "Rising Star Challenge",
-      tagline: "Fresh faces. Fierce competition. Big break.",
-      category: "Talent",
-      coverImage:
-        "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=1200&auto=format&fit=crop",
-      status: "voting-live",
-      endsAt: endsIn9d,
-      totalVotes: 47060,
-      rewards: [
-        { position: "1st Place", amount: 2500000, perk: "₦2.5M cash + mentorship program" },
-        { position: "2nd Place", amount: 1200000, perk: "₦1.2M cash + studio session" },
-        { position: "3rd Place", amount: 600000, perk: "₦600K cash + headshot package" },
-      ],
-      contestants: {
-        create: [
-          {
-            number: 4,
-            name: "Kemi Balogun",
-            state: "Lagos, Nigeria",
-            age: 21,
-            occupation: "Afro-soul Singer",
-            bio: "Kemi's vocals went viral covering Afrobeats classics. She's recording her first EP with your votes.",
-            heroImage:
-              "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 15210,
-            voteGoal: 25000,
-            rank: 1,
-            prize: 50000,
-            votingEndsAt: endsIn9d,
-          },
-          {
-            number: 18,
-            name: "Emeka Duru",
-            state: "Aba, Nigeria",
-            age: 23,
-            occupation: "Dancer & Choreographer",
-            bio: "Emeka leads a street-dance crew of 12 and dreams of a national tour.",
-            heroImage:
-              "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 13355,
-            voteGoal: 25000,
-            rank: 2,
-            prize: 50000,
-            votingEndsAt: endsIn9d,
-          },
-          {
-            number: 27,
-            name: "Fatima Sule",
-            state: "Kano, Nigeria",
-            age: 20,
-            occupation: "Poet & Spoken Word Artist",
-            bio: "Fatima performs in Hausa and English, telling stories of northern womanhood.",
-            heroImage:
-              "https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 10450,
-            voteGoal: 25000,
-            rank: 3,
-            prize: 50000,
-            votingEndsAt: endsIn9d,
-          },
-          {
-            number: 33,
-            name: "Seyi Afolabi",
-            state: "Abeokuta, Nigeria",
-            age: 22,
-            occupation: "Comedian & Skit Maker",
-            bio: "Seyi's skits have 400k followers. Winning funds his first comedy special.",
-            heroImage:
-              "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 8045,
-            voteGoal: 25000,
-            rank: 4,
-            prize: 50000,
-            votingEndsAt: endsIn9d,
-          },
-        ],
-      },
-    },
-  });
-  console.log("  ✓ Contest:", contest2.title);
-
-  // ---------- Contest 3: Style Icon Awards (upcoming) ----------
-  const endsIn16d = new Date(Date.now() + 16 * day);
-  const contest3 = await prisma.contest.create({
-    data: {
-      title: "Style Icon Awards",
-      tagline: "Fashion-forward. Tradition-meets-couture showdown.",
-      category: "Fashion",
-      coverImage:
-        "https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?q=80&w=1200&auto=format&fit=crop",
-      status: "upcoming",
-      endsAt: endsIn16d,
-      totalVotes: 0,
-      rewards: [
-        { position: "1st Place", amount: 3000000, perk: "₦3M cash + runway contract" },
-        { position: "2nd Place", amount: 1500000, perk: "₦1.5M cash + lookbook shoot" },
-      ],
-      contestants: {
-        create: [
-          {
-            number: 5,
-            name: "Ada Umeh",
-            state: "Nnewi, Nigeria",
-            age: 24,
-            occupation: "Stylist",
-            bio: "Ada styles celebrities for red carpets across Africa.",
-            heroImage:
-              "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 0,
-            voteGoal: 25000,
-            rank: 0,
-            prize: 50000,
-            votingEndsAt: endsIn16d,
-          },
-          {
-            number: 11,
-            name: "Musa Danjuma",
-            state: "Jos, Nigeria",
-            age: 26,
-            occupation: "Leatherwear Designer",
-            bio: "Musa crafts premium leather pieces from Jos hides.",
-            heroImage:
-              "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 0,
-            voteGoal: 25000,
-            rank: 0,
-            prize: 50000,
-            votingEndsAt: endsIn16d,
-          },
-          {
-            number: 22,
-            name: "Bisi Adewale",
-            state: "Osogbo, Nigeria",
-            age: 23,
-            occupation: "Textile Artist",
-            bio: "Bisi hand-dyes adire textiles for global fashion houses.",
-            heroImage:
-              "https://images.unsplash.com/photo-1517365830460-955ce3ccd263?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 0,
-            voteGoal: 25000,
-            rank: 0,
-            prize: 50000,
-            votingEndsAt: endsIn16d,
-          },
-        ],
-      },
-    },
-  });
-  console.log("  ✓ Contest:", contest3.title);
-
-  // ---------- Contest 4: Voice of the People (voting live) ----------
-  const endsIn5d = new Date(Date.now() + 5 * day);
-  const contest4 = await prisma.contest.create({
-    data: {
-      title: "Voice of the People",
-      tagline: "One mic. One message. The crowd decides.",
-      category: "Debate",
-      coverImage:
-        "https://images.unsplash.com/photo-1475721027785-f74eccf877e2?q=80&w=1200&auto=format&fit=crop",
-      status: "voting-live",
-      endsAt: endsIn5d,
-      totalVotes: 21340,
-      rewards: [
-        { position: "1st Place", amount: 1800000, perk: "₦1.8M cash + media fellowship" },
-        { position: "2nd Place", amount: 900000, perk: "₦900K cash + podcast deal" },
-      ],
-      contestants: {
-        create: [
-          {
-            number: 2,
-            name: "Oluwaseun Akin",
-            state: "Lagos, Nigeria",
-            age: 28,
-            occupation: "Policy Analyst",
-            bio: "Oluwaseun debates fiscal policy with data-driven clarity.",
-            heroImage:
-              "https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 11750,
-            voteGoal: 25000,
-            rank: 1,
-            prize: 50000,
-            votingEndsAt: endsIn5d,
-          },
-          {
-            number: 16,
-            name: "Hadiza Yusuf",
-            state: "Kaduna, Nigeria",
-            age: 25,
-            occupation: "Public Health Advocate",
-            bio: "Hadiza campaigns for primary healthcare funding in rural states.",
-            heroImage:
-              "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?q=80&w=1200&auto=format&fit=crop",
-            gallery: [],
-            votes: 9590,
-            voteGoal: 25000,
-            rank: 2,
-            prize: 50000,
-            votingEndsAt: endsIn5d,
-          },
-        ],
-      },
-    },
-  });
-  console.log("  ✓ Contest:", contest4.title);
-
-  console.log("✅ Seed complete");
+  console.log(
+    "  ✓ Contest created:",
+    contest.title,
+    "(voting-live, ends in 14 days)",
+  );
+  console.log("✅ Seed complete — 1 active contest");
 }
 
 /**
  * Only seed when this file is RUN directly (`npm run seed`), never when it's
  * merely imported — contest.controller.js imports defaultContestCover from
  * here, so without this guard every server boot (incl. every nodemon restart)
- * wiped and reseeded the whole database. A restart landing mid-seed then
- * crashed with the Contest/Contestant relation violation (P2014), taking the
- * whole API down (ECONNREFUSED on every request, login included).
+ * wiped and reseeded the whole database.
  */
 import { fileURLToPath } from "node:url";
 
@@ -440,4 +183,3 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       process.exit(1);
     });
 }
-
