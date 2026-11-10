@@ -52,13 +52,19 @@ export async function createDynamicAccount({
   externalReference,
 }) {
   assertConfigured();
+  // KoboPoint requires email + phone when creating the customer inline.
+  // Guest voters don't have either, so we derive deterministic stand-ins
+  // from the payment reference — they only identify THIS payment attempt.
+  const fallbackEmail =
+    `votes.${String(externalReference).toLowerCase().replace(/[^a-z0-9]/g, "")}@pay.rivalry.com.ng`;
+  const fallbackPhone = "07000000000";
   const res = await fetch(`${BASE}/v1/virtual-accounts`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({
       name,
-      email: email || undefined,
-      phoneNumber: phoneNumber || undefined,
+      email: email || fallbackEmail,
+      phoneNumber: phoneNumber || fallbackPhone,
       bankCode: config.kobopointBankCodes,
       businessId: config.kobopointBusinessId,
       accountType: "dynamic",
