@@ -117,6 +117,56 @@ export async function createVoteAccount(req, res, next) {
 }
 
 /**
+ * POST /api/payments/:reference/verify
+ * Manual "I've sent the money" check — actively asks KoboPoint whether the
+ * transfer has landed for this reference/account and credits immediately.
+ */
+export async function verifyPayment(req, res, next) {
+  try {
+    const intent = await prisma.paymentIntent.findUnique({
+      where: { reference: req.params.reference },
+    });
+    if (!intent) throw new ApiError(404, "Payment not found");
+
+    let settled = false;
+    if (intent.status === "pending") {
+      // Ask KoboPoint by account number and by our external reference —
+      // whichever lookup they support.
+      const lookups = [
+        intent.accountNumber,
+        intent.reference,
+        intent.reservedAccountId,
+      ].filter(Boolean);
+      let txn = null;
+      for (const key of lookups) {
+        txn = await verifyTransaction(key);
+        if (txn) break;
+      }
+      if (
+        txn &&
+        String(txn.status || "").toLowerCase() === "success" &&
+        Number(txn.amount) >= intent.amount
+      ) {
+        await settleIntent(intent, txn);
+        settled = true;
+      }
+    }
+
+    const fresh = await prisma.paymentIntent.findUnique({
+      where: { reference: intent.reference },
+    });
+    res.json({
+      success: true,
+      verified: (fresh?.status ?? intent.status) === "paid",
+      payment: publicIntent(fresh ?? intent),
+      settled,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/payments/:reference/status
  * What the voting page polls while the supporter makes the transfer.
  * Also verifies against KoboPoint directly as a webhook fallback.
